@@ -1,0 +1,2 @@
+﻿key,GridWidth,GridHeight,BrushRadius,EraseStrength,CompletionThreshold,TargetMapName
+default,80,16,4,30,0.7,YoungMinMap

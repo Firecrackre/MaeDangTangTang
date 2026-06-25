@@ -1,0 +1,274 @@
+@Component
+script ScratchTicketManager extends Component
+    -- ===== Tunable properties (adjustable for future upgrades) =====
+    property integer GridWidth = 40          -- foil pixel-grid width per ticket
+    property integer GridHeight = 8          -- foil pixel-grid height per ticket
+    property number BrushRadius = 2.0        -- erase circle radius in pixel units (the "transparent circle" around the cursor)
+    property number EraseStrength = 30       -- 0~100. Alpha removed per touch/hold event = EraseStrength/100
+    property number CompletionThreshold = 0.7 -- foil fraction that must reach alpha 0 to auto-complete a ticket
+    property string TargetMapName = "YoungMinMap" -- only show/interact while the local player is on this map
+    -- All of the above are FALLBACK defaults. If the data table below exists, its values override them at OnBeginPlay.
+    property string ConfigDataSetName = "ScratchTicketConfig" -- UserDataSet (data table) name that drives the config
+
+    -- ===== Bound entities (UUIDs injected by the UI builder) =====
+    property Entity board = "7efccaf4-7947-4708-bb07-6a1aba564e1f"
+    property Entity foil1 = "137cf37d-4610-46f1-bbcb-70a9b9fca425"
+    property Entity foil2 = "a753c45e-fd5c-4840-a680-dab6c1e7edfd"
+    property Entity foil3 = "f2274449-74b4-40be-a4e2-64fed4e6e72e"
+
+    -- ===== Runtime state =====
+    property any tickets = nil
+    property any touchHandler = nil
+    property any holdHandler = nil
+    property boolean isActive = false
+
+    @ExecSpace("ClientOnly")
+    method void OnBeginPlay()
+        -- Loads config from the data table (or falls back to defaults), then builds foils + wires input.
+        self:LoadConfig()
+        self.tickets = {}
+        self:RegisterTicket(1, self.foil1)
+        self:RegisterTicket(2, self.foil2)
+        self:RegisterTicket(3, self.foil3)
+
+        self.touchHandler = _InputService:ConnectEvent(ScreenTouchEvent, self.OnTouchBegin)
+        self.holdHandler = _InputService:ConnectEvent(ScreenTouchHoldEvent, self.OnTouchHold)
+
+        -- Start hidden so the gate's initial state is consistent (isActive=false <-> board hidden).
+        -- Foils were ResetWithColor'd above while board was still enabled, so their pixel buffers persist.
+        -- OnUpdate re-enables the board only on the target map.
+        self.isActive = false
+        if isvalid(self.board) then
+            self.board.Enable = false
+        end
+        log("[ScratchTicket] OnBeginPlay tickets=" .. #self.tickets .. " grid=" .. self.GridWidth .. "x" .. self.GridHeight)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void LoadConfig()
+        -- Reads grid/brush/strength/threshold/target-map from the ScratchTicketConfig data table.
+        -- Single source of truth: edit the CSV to retune without code changes. Absent table/row -> inspector defaults.
+        local ds = _DataService:GetTable(self.ConfigDataSetName)
+        if ds == nil then
+            log("[ScratchTicket] config table '" .. self.ConfigDataSetName .. "' not found, using defaults grid=" .. self.GridWidth .. "x" .. self.GridHeight)
+            return
+        end
+        local row = ds:FindRow("key", "default")
+        if row == nil then
+            log("[ScratchTicket] config row 'default' not found, using defaults")
+            return
+        end
+        self.GridWidth = math.floor(self:ConfigNumber(row, "GridWidth", self.GridWidth))
+        self.GridHeight = math.floor(self:ConfigNumber(row, "GridHeight", self.GridHeight))
+        self.BrushRadius = self:ConfigNumber(row, "BrushRadius", self.BrushRadius)
+        self.EraseStrength = self:ConfigNumber(row, "EraseStrength", self.EraseStrength)
+        self.CompletionThreshold = self:ConfigNumber(row, "CompletionThreshold", self.CompletionThreshold)
+        local mapName = row:GetItem("TargetMapName")
+        if mapName ~= nil and mapName ~= "" then
+            self.TargetMapName = mapName
+        end
+        log("[ScratchTicket] config loaded grid=" .. self.GridWidth .. "x" .. self.GridHeight .. " brush=" .. self.BrushRadius .. " strength=" .. self.EraseStrength .. " map=" .. self.TargetMapName)
+    end
+
+    @ExecSpace("ClientOnly")
+    method number ConfigNumber(any row, string columnName, number fallback)
+        -- Parses a string cell to number; empty/nil/invalid -> fallback.
+        local cell = row:GetItem(columnName)
+        if cell == nil or cell == "" then return fallback end
+        local n = tonumber(cell)
+        if n == nil then return fallback end
+        return n
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ReloadConfig()
+        -- Re-reads the data table and re-initializes all foils. Live-retune entry point for in-game logic.
+        self:LoadConfig()
+        self.tickets = {}
+        self:RegisterTicket(1, self.foil1)
+        self:RegisterTicket(2, self.foil2)
+        self:RegisterTicket(3, self.foil3)
+        log("[ScratchTicket] config reloaded and foils reset")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void RegisterTicket(integer index, Entity foilEntity)
+        -- Initializes one ticket's foil pixel grid (filled silver, alpha 1) and records its state.
+        if not isvalid(foilEntity) then
+            log("[ScratchTicket] RegisterTicket " .. index .. " invalid foil entity")
+            return
+        end
+        local pixel = foilEntity.PixelGUIRendererComponent
+        local ui = foilEntity.UITransformComponent
+        local W = self.GridWidth
+        local H = self.GridHeight
+        pixel:ResetWithColor(W, H, Color(0.78, 0.78, 0.82, 1.0))
+        local alpha = {}
+        for i = 1, W * H do
+            alpha[i] = 1.0
+        end
+        self.tickets[index] = {
+            index = index,
+            pixel = pixel,
+            ui = ui,
+            alpha = alpha,
+            cleared = 0,
+            total = W * H,
+            completed = false,
+        }
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnUpdate(number delta)
+        -- Gates visibility + interaction to the target map (shows the board only while the local player is on it).
+        local lp = _UserService.LocalPlayer
+        local onMap = false
+        if isvalid(lp) and lp.CurrentMapName == self.TargetMapName then
+            onMap = true
+        end
+        if onMap ~= self.isActive then
+            self.isActive = onMap
+            if isvalid(self.board) then
+                self.board.Enable = onMap
+            end
+            log("[ScratchTicket] active=" .. tostring(onMap) .. " map=" .. tostring(isvalid(lp) and lp.CurrentMapName or "nil"))
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnTouchBegin(ScreenTouchEvent event)
+        -- Click start: scratch at the touch point.
+        self:Scratch(event.TouchPoint, event.TouchId)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnTouchHold(ScreenTouchHoldEvent event)
+        -- Drag/hold: fires continuously while pressed, keeps scratching along the path.
+        self:Scratch(event.TouchPoint, event.TouchId)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void Scratch(Vector2 touchPoint, integer touchId)
+        -- Hit-tests the touch against each foil rect (world coords) and erases inside the brush radius.
+        if not self.isActive then return end
+        if touchId < 1 then return end
+        if self.tickets == nil then return end
+
+        -- Touch in game-world coords; foil rect corners via LocalUIToWorldPosition (same world space).
+        local worldPt = _UILogic:ScreenToWorldPosition(touchPoint)
+        for i = 1, #self.tickets do
+            local t = self.tickets[i]
+            if t ~= nil and (not t.completed) and isvalid(t.ui) then
+                local ui = t.ui
+                local rs = ui.RectSize
+                local bl = _UILogic:LocalUIToWorldPosition(Vector2(-rs.x * 0.5, -rs.y * 0.5), ui)
+                local tr = _UILogic:LocalUIToWorldPosition(Vector2(rs.x * 0.5, rs.y * 0.5), ui)
+                local w = tr.x - bl.x
+                local h = tr.y - bl.y
+                if w ~= 0 and h ~= 0 then
+                    local u = (worldPt.x - bl.x) / w
+                    local v = (worldPt.y - bl.y) / h
+                    if u >= 0 and u <= 1 and v >= 0 and v <= 1 then
+                        self:ApplyBrush(t, u, v)
+                        return
+                    end
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ApplyBrush(any t, number u, number v)
+        -- Reduces alpha of every foil pixel inside the circular brush by EraseStrength/100 (gradual rub-off).
+        local W = self.GridWidth
+        local H = self.GridHeight
+        local cx = math.floor(u * W) + 1
+        local cy = math.floor(v * H) + 1
+        local R = self.BrushRadius
+        local r2 = R * R
+        local dec = self.EraseStrength / 100.0
+        if dec <= 0 then return end
+
+        local fromX = math.max(1, math.floor(cx - R))
+        local toX = math.min(W, math.ceil(cx + R))
+        local fromY = math.max(1, math.floor(cy - R))
+        local toY = math.min(H, math.ceil(cy + R))
+
+        for py = fromY, toY do
+            for px = fromX, toX do
+                local ddx = px - cx
+                local ddy = py - cy
+                if (ddx * ddx + ddy * ddy) <= r2 then
+                    local idx = (py - 1) * W + px
+                    local a = t.alpha[idx]
+                    if a > 0 then
+                        a = a - dec
+                        if a < 0 then a = 0 end
+                        t.alpha[idx] = a
+                        t.pixel:SetPixel(px, py, Color(0.78, 0.78, 0.82, a))
+                        if a <= 0 then
+                            t.cleared = t.cleared + 1
+                        end
+                    end
+                end
+            end
+        end
+
+        if (not t.completed) and (t.cleared / t.total) >= self.CompletionThreshold then
+            self:CompleteTicket(t)
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void CompleteTicket(any t)
+        -- Clears all remaining foil and notifies the game-logic extension point.
+        t.completed = true
+        t.pixel:FillColor(Color(0, 0, 0, 0))
+        log("[ScratchTicket] ticket " .. t.index .. " completed")
+        self:OnTicketCompleted(t.index)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnTicketCompleted(integer index)
+        -- EXTENSION POINT: hook game logic here later (reward / probability handled elsewhere).
+        log("[ScratchTicket] OnTicketCompleted index=" .. index)
+        local allDone = true
+        for i = 1, #self.tickets do
+            if not self.tickets[i].completed then
+                allDone = false
+            end
+        end
+        if allDone then
+            log("[ScratchTicket] ALL tickets completed")
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SetEraseStrength(number strength)
+        -- Runtime override of the data-table EraseStrength (0~100). Data table is the persistent source; this is a live tweak.
+        local s = strength
+        if s < 0 then s = 0 end
+        if s > 100 then s = 100 end
+        self.EraseStrength = s
+        log("[ScratchTicket] EraseStrength set to " .. s)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SetBrushRadius(number radius)
+        -- Runtime override of the data-table BrushRadius (cell units). Data table is the persistent source; this is a live tweak.
+        if radius < 0 then radius = 0 end
+        self.BrushRadius = radius
+        log("[ScratchTicket] BrushRadius set to " .. radius)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnEndPlay()
+        -- Releases input subscriptions (mandatory cleanup).
+        if self.touchHandler then
+            _InputService:DisconnectEvent(ScreenTouchEvent, self.touchHandler)
+        end
+        if self.holdHandler then
+            _InputService:DisconnectEvent(ScreenTouchHoldEvent, self.holdHandler)
+        end
+    end
+end
