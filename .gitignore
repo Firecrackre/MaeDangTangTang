@@ -5,9 +5,12 @@
 .claude/
 
 # === MSW AI 연결이 자동 생성/관리하는 파일 (개발자별, 제외) ===
-.mcp.json          # MCP 서버 설정 + API 토큰(시크릿) → 절대 커밋 금지
-AGENTS.md          # MSW AI 연결 시 자동 생성되는 에이전트 지침
-skills-lock.json   # MSW AI skills 버전 잠금파일
+# MCP 서버 설정 + API 토큰(시크릿) → 절대 커밋 금지
+.mcp.json
+# MSW AI 연결 시 자동 생성되는 에이전트 지침
+AGENTS.md
+# MSW AI skills 버전 잠금파일
+skills-lock.json
 
 # === OS / 에디터 임시 파일 ===
 Thumbs.db
