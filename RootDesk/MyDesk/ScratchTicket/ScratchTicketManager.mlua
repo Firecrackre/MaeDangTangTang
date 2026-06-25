@@ -15,12 +15,21 @@ script ScratchTicketManager extends Component
     property Entity foil1 = "137cf37d-4610-46f1-bbcb-70a9b9fca425"
     property Entity foil2 = "a753c45e-fd5c-4840-a680-dab6c1e7edfd"
     property Entity foil3 = "f2274449-74b4-40be-a4e2-64fed4e6e72e"
+    property Entity crumbLayer = "1da37c45-f05c-46c7-9ffa-0d9463c4e880" -- full-screen pool container for falling silver crumbs (UUID injected by UI builder)
+
+    -- ===== Silver crumb particle tuning =====
+    property number CrumbSpawnChance = 0.4   -- 0~1 probability of emitting a crumb per scratch event ("a little at a time")
+    property number CrumbGravity = 1600      -- downward acceleration in UI pixels/s^2
+    property number CrumbFloorY = -540       -- screen-bottom Y (canvas center origin); crumb vanishes on reaching it
+    property number CrumbSize = 10           -- crumb square size in UI pixels (applied to every pooled crumb at OnBeginPlay; 0 = keep .ui authored size)
 
     -- ===== Runtime state =====
     property any tickets = nil
     property any touchHandler = nil
     property any holdHandler = nil
     property boolean isActive = false
+    property any crumbs = nil                -- pooled crumb records {entity, ui, vx, vy, active}
+    property integer crumbCursor = 0         -- round-robin cursor into the crumb pool
 
     @ExecSpace("ClientOnly")
     method void OnBeginPlay()
@@ -30,6 +39,8 @@ script ScratchTicketManager extends Component
         self:RegisterTicket(1, self.foil1)
         self:RegisterTicket(2, self.foil2)
         self:RegisterTicket(3, self.foil3)
+
+        self:BuildCrumbPool()
 
         self.touchHandler = _InputService:ConnectEvent(ScreenTouchEvent, self.OnTouchBegin)
         self.holdHandler = _InputService:ConnectEvent(ScreenTouchHoldEvent, self.OnTouchHold)
@@ -119,6 +130,59 @@ script ScratchTicketManager extends Component
     end
 
     @ExecSpace("ClientOnly")
+    method void BuildCrumbPool()
+        -- Collects the pre-authored crumb sprites under CrumbLayer into a reusable pool (all start disabled).
+        self.crumbs = {}
+        self.crumbCursor = 0
+        if not isvalid(self.crumbLayer) then
+            log("[ScratchTicket] crumbLayer invalid, crumb particles disabled")
+            return
+        end
+        for _, c in ipairs(self.crumbLayer.Children:ToTable()) do
+            c.Enable = false
+            if self.CrumbSize > 0 then
+                c.UITransformComponent.RectSize = Vector2(self.CrumbSize, self.CrumbSize)
+            end
+            table.insert(self.crumbs, {
+                entity = c,
+                ui = c.UITransformComponent,
+                vx = 0,
+                vy = 0,
+                active = false,
+            })
+        end
+        log("[ScratchTicket] crumb pool size=" .. #self.crumbs)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SpawnCrumb(Vector2 touchPoint)
+        -- Emits one silver crumb at the scratch point (probability-gated so debris falls "a little at a time").
+        if self.crumbs == nil or #self.crumbs == 0 then return end
+        if not isvalid(self.crumbLayer) then return end
+        if _UtilLogic:RandomDouble() > self.CrumbSpawnChance then return end
+
+        -- Find a free crumb starting at the round-robin cursor (one pass; bail if all are in flight).
+        local n = #self.crumbs
+        local rec = nil
+        for step = 1, n do
+            self.crumbCursor = (self.crumbCursor % n) + 1
+            local candidate = self.crumbs[self.crumbCursor]
+            if not candidate.active then
+                rec = candidate
+                break
+            end
+        end
+        if rec == nil then return end
+
+        local p = _UILogic:ScreenToLocalUIPosition(touchPoint, self.crumbLayer.UITransformComponent)
+        rec.ui.anchoredPosition = p
+        rec.vx = -70 + _UtilLogic:RandomDouble() * 140   -- sideways scatter
+        rec.vy = -40 + _UtilLogic:RandomDouble() * 60    -- slight initial pop up/down before gravity takes over
+        rec.active = true
+        rec.entity.Enable = true
+    end
+
+    @ExecSpace("ClientOnly")
     method void OnUpdate(number delta)
         -- Gates visibility + interaction to the target map (shows the board only while the local player is on it).
         local lp = _UserService.LocalPlayer
@@ -132,6 +196,29 @@ script ScratchTicketManager extends Component
                 self.board.Enable = onMap
             end
             log("[ScratchTicket] active=" .. tostring(onMap) .. " map=" .. tostring(isvalid(lp) and lp.CurrentMapName or "nil"))
+        end
+
+        self:UpdateCrumbs(delta)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateCrumbs(number delta)
+        -- Advances active crumbs under gravity; a crumb vanishes the instant it reaches the screen-bottom floor.
+        if self.crumbs == nil then return end
+        for i = 1, #self.crumbs do
+            local rec = self.crumbs[i]
+            if rec.active then
+                rec.vy = rec.vy - self.CrumbGravity * delta
+                local pos = rec.ui.anchoredPosition
+                local nx = pos.x + rec.vx * delta
+                local ny = pos.y + rec.vy * delta
+                if ny <= self.CrumbFloorY then
+                    rec.active = false
+                    rec.entity.Enable = false
+                else
+                    rec.ui.anchoredPosition = Vector2(nx, ny)
+                end
+            end
         end
     end
 
@@ -170,6 +257,7 @@ script ScratchTicketManager extends Component
                     local v = (worldPt.y - bl.y) / h
                     if u >= 0 and u <= 1 and v >= 0 and v <= 1 then
                         self:ApplyBrush(t, u, v)
+                        self:SpawnCrumb(touchPoint)
                         return
                     end
                 end
@@ -269,6 +357,15 @@ script ScratchTicketManager extends Component
         end
         if self.holdHandler then
             _InputService:DisconnectEvent(ScreenTouchHoldEvent, self.holdHandler)
+        end
+        if self.crumbs ~= nil then
+            for i = 1, #self.crumbs do
+                local rec = self.crumbs[i]
+                rec.active = false
+                if isvalid(rec.entity) then
+                    rec.entity.Enable = false
+                end
+            end
         end
     end
 end
