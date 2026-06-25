@@ -1,0 +1,22 @@
+# === MapleStory Worlds 자동 연결 AI 런타임 (제외) ===
+.mswai/
+
+# === Claude Code 설정 + skills (개발자별 개별 관리, 전체 제외) ===
+.claude/
+
+# === MSW AI 연결이 자동 생성/관리하는 파일 (개발자별, 제외) ===
+.mcp.json          # MCP 서버 설정 + API 토큰(시크릿) → 절대 커밋 금지
+AGENTS.md          # MSW AI 연결 시 자동 생성되는 에이전트 지침
+skills-lock.json   # MSW AI skills 버전 잠금파일
+
+# === OS / 에디터 임시 파일 ===
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.tmp
+*.bak
+*~
+
+# === 추적 대상 (참고: 아래는 '제외하지 않음') ===
+# RootDesk/  map/  ui/  Global/  Environment/  Assets/  CLAUDE.md
+# (CLAUDE.md 는 사람이 관리하므로 유지. AGENTS.md 는 자동 생성이라 제외)
