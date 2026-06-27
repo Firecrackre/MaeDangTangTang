@@ -82,12 +82,12 @@ script BlacksmithConfig extends Logic
         -- 보스공격력(BATK)은 모든 장비에서 유효이므로 atk 목록에 포함한다.
         d.equipment = {
             sword  = { id = "sword",  label = "검",     stat = "STR", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000 },
-            bow    = { id = "bow",    label = "활",     stat = "DEX", atk = {"ATK", "BATK"},  basePrice = 25000,  buyCost = 8000  },
+            bow    = { id = "bow",    label = "활",     stat = "DEX", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000 },
             staff  = { id = "staff",  label = "스태프", stat = "INT", atk = {"MATK", "BATK"}, basePrice = 100000, buyCost = 40000 },
-            wand   = { id = "wand",   label = "완드",   stat = "INT", atk = {"MATK", "BATK"}, basePrice = 25000,  buyCost = 8000  },
+            wand   = { id = "wand",   label = "완드",   stat = "INT", atk = {"MATK", "BATK"}, basePrice = 50000,  buyCost = 18000 },
             dagger = { id = "dagger", label = "단도",   stat = "LUK", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000 },
         }
-        d.equipmentOrder = {"bow", "wand", "sword", "dagger", "staff"}  -- 저가→고가
+        d.equipmentOrder = {"bow", "wand", "sword", "dagger", "staff"}  -- 표준 4종(50k) → 프리미엄 스태프(100k)
 
         -- 빚 상환 (concept §6-3, flow §15)
         d.debtCycle = 5                         -- N회 큐브 사용마다 상환
