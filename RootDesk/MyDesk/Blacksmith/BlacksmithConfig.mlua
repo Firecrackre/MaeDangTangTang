@@ -1,0 +1,154 @@
+@Logic
+script BlacksmithConfig extends Logic
+    -- 커닝시티 뒷골목 대장장이 — 전 밸런스 상수의 단일 진실 공급원(SSOT).
+    -- 여기 있는 모든 수치는 조정 가능한 기본값이다. 기획 확정 시 이 파일만 수정한다.
+    property any Data = nil
+
+    method void OnInitialize()
+        -- 서버/클라이언트 양쪽에서 동일한 설정 사본을 미리 구축한다.
+        self:BuildData()
+    end
+
+    method void OnBeginPlay()
+        -- 검증용: 설정이 정상 구축되었는지 로그로 증거를 남긴다.
+        local d = self:GetData()
+        log("[BlacksmithConfig] ready. startMeso=" .. tostring(d.startMeso)
+            .. ", cubeCost=" .. tostring(d.cubeCost)
+            .. ", equipments=" .. tostring(#d.equipmentOrder))
+    end
+
+    method void BuildData()
+        -- 모든 밸런스 상수를 조립한다(지연 1회).
+        if self.Data ~= nil then return end
+        local d = {}
+
+        -- 시작/재화 기본값 (flow §5, concept §6-2)
+        d.startMeso = 40000
+        d.cubeCost = 5000              -- 이상한 큐브 사용 비용
+        d.bonusChance = 15             -- 이탈 확률(%) — 주요 옵션 1줄당 (potential §8)
+
+        -- 등급 (potential §4)
+        d.gradeOrder = {"Rare", "Epic", "Unique", "Legendary"}
+        d.gradeProb = { Rare = 60, Epic = 28, Unique = 10, Legendary = 2 }       -- 합 100
+        d.gradeMult = { Rare = 1.0, Epic = 2.0, Unique = 3.5, Legendary = 5.0 }  -- 등급 배수
+
+        -- 옵션 타입 확률 — 각 줄 개별 판정 (potential §5). 합 100.
+        d.optionTypeProb = { Main = 45, Junk = 45, Destroy = 10 }
+
+        -- 주요 옵션 풀: 주스탯4 + 공격계열3 = 7종 균등 추첨 (potential §6)
+        d.mainPool = {"STR", "DEX", "INT", "LUK", "ATK", "MATK", "BATK"}
+        d.mainOptions = {
+            STR  = { group = "MainStat", normal = 9,  bonus = 12, label = "STR",        unit = "%" },
+            DEX  = { group = "MainStat", normal = 9,  bonus = 12, label = "DEX",        unit = "%" },
+            INT  = { group = "MainStat", normal = 9,  bonus = 12, label = "INT",        unit = "%" },
+            LUK  = { group = "MainStat", normal = 9,  bonus = 12, label = "LUK",        unit = "%" },
+            ATK  = { group = "Attack",   normal = 6,  bonus = 9,  label = "공격력",      unit = "%" },
+            MATK = { group = "Attack",   normal = 6,  bonus = 9,  label = "마력",        unit = "%" },
+            BATK = { group = "Attack",   normal = 20, bonus = 30, label = "보스공격력",  unit = "%" },
+        }
+
+        -- 잡옵 (potential §7) — value/보너스 (pricing §9)
+        d.junkPool = {"Sleep", "Speed", "Jump", "Language", "Charm"}
+        d.junkOptions = {
+            Sleep    = { value = 30, unit = "%", bonus = 100, label = "수면 효율" },
+            Speed    = { value = 10, unit = "",  bonus = 200, label = "이동속도" },
+            Jump     = { value = 10, unit = "",  bonus = 300, label = "점프력" },
+            Language = { value = 30, unit = "%", bonus = 400, label = "언어 능력" },
+            Charm    = { value = 30, unit = "%", bonus = 500, label = "친화력" },
+        }
+
+        -- 옵션 보너스 — 유효 기준 (pricing §9)
+        d.optionBonus = {
+            validStat   = 15000,   -- 유효 주스탯 (STR/DEX/INT/LUK)
+            validAtk    = 20000,   -- 유효 공격력 / 마력
+            validBatk   = 25000,   -- 유효 보스공격력
+            invalidMain = 5000,    -- 비유효 주요 옵션 (장비와 안 맞는 주스탯/공격계열)
+        }
+
+        -- 이탈 배수 — 유효 이탈 개수 기준 (pricing §12). 키 = 개수(0~3)
+        d.bonusMult = { [0] = 1.0, [1] = 1.3, [2] = 1.8, [3] = 2.5 }
+
+        -- 조합 보너스 — 우선순위 높은 순서대로. 적용은 PricingCalculator에서 최고 1개만. (pricing §10)
+        d.comboBonus = {
+            { key = "godAttack",  bonus = 150000 },  -- 유효 공격계열 3줄 + 유효 이탈 3개 (신급 대박)
+            { key = "legendStat", bonus = 150000 },  -- 유효 동일 주스탯 3줄 + 유효 이탈 3개 (전설급 대박)
+            { key = "attack3",    bonus = 90000  },  -- 유효 공격계열 3줄
+            { key = "sameStat3",  bonus = 75000  },  -- 유효 동일 주스탯 3줄
+            { key = "main3",      bonus = 50000  },  -- 유효 주요 옵션 3줄
+            { key = "main2bonus", bonus = 35000  },  -- 유효 주요 옵션 2줄 + 이탈 포함
+        }
+
+        -- 장비 5종 (flow §6, pricing §7·§8). basePrice=기본 판매가, buyCost=구매 비용.
+        -- 보스공격력(BATK)은 모든 장비에서 유효이므로 atk 목록에 포함한다.
+        d.equipment = {
+            sword  = { id = "sword",  label = "검",     stat = "STR", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000 },
+            bow    = { id = "bow",    label = "활",     stat = "DEX", atk = {"ATK", "BATK"},  basePrice = 25000,  buyCost = 8000  },
+            staff  = { id = "staff",  label = "스태프", stat = "INT", atk = {"MATK", "BATK"}, basePrice = 100000, buyCost = 40000 },
+            wand   = { id = "wand",   label = "완드",   stat = "INT", atk = {"MATK", "BATK"}, basePrice = 25000,  buyCost = 8000  },
+            dagger = { id = "dagger", label = "단도",   stat = "LUK", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000 },
+        }
+        d.equipmentOrder = {"bow", "wand", "sword", "dagger", "staff"}  -- 저가→고가
+
+        -- 빚 상환 (concept §6-3, flow §15)
+        d.debtCycle = 5                         -- N회 큐브 사용마다 상환
+        d.debtTable = {1000, 2000, 3500, 5000}  -- 1~4단계 금액
+        d.debtStep = 2000                       -- 5단계 이후 단계마다 증가폭
+
+        self.Data = d
+    end
+
+    method any GetData()
+        -- 전체 설정 테이블 반환(지연 구축).
+        if self.Data == nil then self:BuildData() end
+        return self.Data
+    end
+
+    method any GetEquipment(string id)
+        -- 장비 1종 정의 반환. 알 수 없는 id면 nil.
+        return self:GetData().equipment[id]
+    end
+
+    method any GetEquipmentOrder()
+        -- 구매/표시 순서의 장비 id 배열.
+        return self:GetData().equipmentOrder
+    end
+
+    method number GetGradeMultiplier(string grade)
+        -- 등급 판매가 배수.
+        return self:GetData().gradeMult[grade]
+    end
+
+    method number GetBonusMultiplier(integer count)
+        -- 유효 이탈 개수별 배수 (0~3 범위로 클램프).
+        local t = self:GetData().bonusMult
+        if count > 3 then count = 3 end
+        if count < 0 then count = 0 end
+        return t[count]
+    end
+
+    method boolean IsValidMain(string equipId, string optionName)
+        -- 주요 옵션이 해당 장비에 유효한지 판정. 보스공격력(BATK)은 항상 유효. (pricing §8)
+        local eq = self:GetEquipment(equipId)
+        if eq == nil then return false end
+        local opt = self:GetData().mainOptions[optionName]
+        if opt == nil then return false end
+        if opt.group == "MainStat" then
+            return optionName == eq.stat
+        elseif opt.group == "Attack" then
+            for _, a in ipairs(eq.atk) do
+                if a == optionName then return true end
+            end
+            return false
+        end
+        return false
+    end
+
+    method integer GetDebtAmount(integer stage)
+        -- 상환 단계별 금액(1부터). debtTable 범위를 넘으면 단계마다 debtStep씩 증가.
+        local d = self:GetData()
+        if stage < 1 then return 0 end
+        local n = #d.debtTable
+        if stage <= n then return d.debtTable[stage] end
+        return d.debtTable[n] + (stage - n) * d.debtStep
+    end
+end
