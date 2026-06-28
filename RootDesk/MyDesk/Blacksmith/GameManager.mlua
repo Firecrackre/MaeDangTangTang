@@ -7,9 +7,14 @@ script GameManager extends Logic
 
     @Sync property integer Meso = 0            -- 보유 메소
     @Sync property string CurrentItemId = ""   -- 현재 보유 아이템(장비 id). 없으면 ""
-    @Sync property integer CubeUseCount = 0    -- 누적 큐브 사용 횟수 ([6]에서 사용)
-    @Sync property integer DebtStage = 0       -- 완료한 상환 단계 ([7]에서 사용)
-    @Sync property boolean IsGameOver = false  -- 게임 오버 여부 ([7]에서 사용)
+    @Sync property integer CubeUseCount = 0    -- 누적 큐브 사용 횟수 ([6])
+    @Sync property integer DebtStage = 0       -- 완료한 상환 단계 ([7])
+    @Sync property boolean IsGameOver = false  -- 게임 오버 여부 ([7])
+
+    -- 빚 상환 상태 (concept §6-3, flow §15·§16)
+    @Sync property integer CubesUntilRepayment = 0 -- 다음 상환까지 남은 큐브 횟수 ([6] HUD 표시용)
+    @Sync property boolean IsRepaymentDue = false  -- 상환 시점 도달(미납) 여부
+    @Sync property integer PendingRepayment = 0    -- 이번에 갚아야 할 금액
 
     -- 현재 아이템의 잠재 결과 요약(@Sync로 HUD가 읽음). 옵션 3줄 전체는 아래 CurrentPotential에 보관. (flow §8)
     @Sync property boolean HasPotential = false      -- 현재 아이템에 큐브를 1회 이상 사용했는지
@@ -31,8 +36,12 @@ script GameManager extends Logic
         self.CubeUseCount = 0
         self.DebtStage = 0
         self.IsGameOver = false
+        self.IsRepaymentDue = false
+        self.PendingRepayment = 0
+        self:UpdateRepaymentCountdown()  -- 시작 시 '다음 상환까지 남은 큐브' 표시 (flow §5-4)
         self:ResetPotentialState()
-        log("[GameManager] session start. meso=" .. tostring(self.Meso))
+        log("[GameManager] session start. meso=" .. tostring(self.Meso)
+            .. ", nextRepayIn=" .. tostring(self.CubesUntilRepayment))
     end
 
     @ExecSpace("Server")
@@ -78,6 +87,11 @@ script GameManager extends Logic
             log_warning("[GameManager] cube rejected: game over")
             return
         end
+        -- 상환 미납 상태면 먼저 갚아야 다음 큐브 사용 가능 (flow §15 "상환 먼저 처리 후 진행")
+        if self.IsRepaymentDue then
+            log_warning("[GameManager] cube rejected: repayment due (settle first)")
+            return
+        end
         -- 큐브 사용은 현재 아이템이 있을 때만 가능 (flow §7 기준)
         if self.CurrentItemId == "" then
             log_warning("[GameManager] cube rejected: no item")
@@ -100,6 +114,17 @@ script GameManager extends Logic
         -- '한 번 더 사용하기' 시 기존 잠재/판매가는 새 결과로 덮어쓴다 (flow §13).
         self.Meso = self.Meso - d.cubeCost
         self.CubeUseCount = self.CubeUseCount + 1
+
+        -- 상환 주기(기본 5회) 경계 도달 시 상환 예정 상태로 전환 (concept §6-3, flow §15).
+        -- 실제 차감/게임오버는 RequestSettleDebt에서 처리(스크래치 결과 완료 후 호출).
+        if self.CubeUseCount % d.debtCycle == 0 then
+            local stage = self.CubeUseCount // d.debtCycle
+            self.IsRepaymentDue = true
+            self.PendingRepayment = _BlacksmithConfig:GetDebtAmount(stage)
+            log("[GameManager] repayment DUE: stage=" .. tostring(stage)
+                .. ", amount=" .. tostring(self.PendingRepayment))
+        end
+        self:UpdateRepaymentCountdown()
 
         -- 잠재능력 판정(서버 권위) → 판매가 계산(파괴면 Destroyed).
         local pr = _PotentialService:RollPotential()
@@ -188,6 +213,45 @@ script GameManager extends Logic
         self.CurrentResultType = ""
         self.CurrentPrice = 0
         self.IsCurrentDestroyed = false
+    end
+
+    @ExecSpace("Server")
+    method void RequestSettleDebt()
+        -- 빚 상환: 상환 시점 도달 시 메소 차감, 부족하면 게임오버. (flow §15·§16)
+        -- UI는 스크래치 결과 완료(파괴 포함) 후 상환 팝업에서 이 메서드를 호출한다 (flow §15 메커톤 기준).
+        if self.IsGameOver then return end
+        if not self.IsRepaymentDue then
+            log_warning("[GameManager] settle rejected: no repayment due")
+            return
+        end
+
+        local amount = self.PendingRepayment
+        if self.Meso >= amount then
+            self.Meso = self.Meso - amount
+            self.DebtStage = self.DebtStage + 1
+            self.IsRepaymentDue = false
+            self.PendingRepayment = 0
+            self:UpdateRepaymentCountdown()
+            log("[GameManager] debt settled: stage=" .. tostring(self.DebtStage)
+                .. ", -" .. tostring(amount) .. ", meso=" .. tostring(self.Meso)
+                .. ", nextRepayIn=" .. tostring(self.CubesUntilRepayment))
+        else
+            -- 상환 금액 부족 → 게임 오버 (flow §16)
+            self.IsGameOver = true
+            log("[GameManager] GAME OVER: cannot repay " .. tostring(amount)
+                .. " (meso=" .. tostring(self.Meso) .. ")")
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void UpdateRepaymentCountdown()
+        -- 다음 상환까지 남은 큐브 횟수 갱신. 미납 상태면 0으로 표시. (concept §6-4, [6])
+        local d = _BlacksmithConfig:GetData()
+        if self.IsRepaymentDue then
+            self.CubesUntilRepayment = 0
+            return
+        end
+        self.CubesUntilRepayment = d.debtCycle - (self.CubeUseCount % d.debtCycle)
     end
 
     method any GetCurrentEquipment()
