@@ -11,6 +11,17 @@ script GameManager extends Logic
     @Sync property integer DebtStage = 0       -- 완료한 상환 단계 ([7]에서 사용)
     @Sync property boolean IsGameOver = false  -- 게임 오버 여부 ([7]에서 사용)
 
+    -- 현재 아이템의 잠재 결과 요약(@Sync로 HUD가 읽음). 옵션 3줄 전체는 아래 CurrentPotential에 보관. (flow §8)
+    @Sync property boolean HasPotential = false      -- 현재 아이템에 큐브를 1회 이상 사용했는지
+    @Sync property string CurrentGrade = ""          -- 현재 잠재 등급(Rare/Epic/Unique/Legendary)
+    @Sync property string CurrentResultType = ""     -- 조합 판정 결과(연출용 RAW 문자열)
+    @Sync property integer CurrentPrice = 0          -- 현재 예상 판매가(파괴 시 0)
+    @Sync property boolean IsCurrentDestroyed = false -- 현재 아이템 파괴 여부 (flow §14)
+
+    -- 잠재 결과 전체(등급+옵션 3줄). 중첩 테이블이라 @Sync 불가 → 서버 권위 보관용.
+    --   UI 단계에서 큐브 사용 시 @ExecSpace("Client") RPC로 클라이언트에 따로 전달한다.
+    property any CurrentPotential = nil
+
     @ExecSpace("ServerOnly")
     method void OnBeginPlay()
         -- 세션 시작값 세팅 (flow §5). 설정은 BlacksmithConfig가 SSOT.
@@ -20,6 +31,7 @@ script GameManager extends Logic
         self.CubeUseCount = 0
         self.DebtStage = 0
         self.IsGameOver = false
+        self:ResetPotentialState()
         log("[GameManager] session start. meso=" .. tostring(self.Meso))
     end
 
@@ -53,12 +65,133 @@ script GameManager extends Logic
 
         self.Meso = self.Meso - eq.buyCost
         self.CurrentItemId = equipId
+        self:ResetPotentialState()  -- 새 아이템은 잠재 미사용 상태에서 시작
         log("[GameManager] bought '" .. eq.label .. "' (-" .. tostring(eq.buyCost)
             .. "), meso=" .. tostring(self.Meso) .. ", item=" .. self.CurrentItemId)
     end
 
+    @ExecSpace("Server")
+    method void RequestUseCube()
+        -- 큐브 사용: 비용 차감 → 횟수 증가 → 잠재 판정 → 판매가 계산 → 결과 보관. (flow §7·§13)
+        -- 최초 사용과 '한 번 더 사용하기'는 둘 다 "현재 아이템에 큐브 사용"이라 이 메서드로 함께 처리한다.
+        if self.IsGameOver then
+            log_warning("[GameManager] cube rejected: game over")
+            return
+        end
+        -- 큐브 사용은 현재 아이템이 있을 때만 가능 (flow §7 기준)
+        if self.CurrentItemId == "" then
+            log_warning("[GameManager] cube rejected: no item")
+            return
+        end
+        -- 파괴된 아이템에는 다시 큐브를 사용할 수 없다. 먼저 확인(파괴 정리)이 필요. (flow §14)
+        if self.IsCurrentDestroyed then
+            log_warning("[GameManager] cube rejected: item destroyed (confirm first)")
+            return
+        end
+
+        local d = _BlacksmithConfig:GetData()
+        if self.Meso < d.cubeCost then
+            log_warning("[GameManager] cube rejected: not enough meso (" .. tostring(self.Meso)
+                .. " < " .. tostring(d.cubeCost) .. ")")
+            return
+        end
+
+        -- 비용 차감 + 큐브 사용 횟수 1 증가 (flow §7-4·5).
+        -- '한 번 더 사용하기' 시 기존 잠재/판매가는 새 결과로 덮어쓴다 (flow §13).
+        self.Meso = self.Meso - d.cubeCost
+        self.CubeUseCount = self.CubeUseCount + 1
+
+        -- 잠재능력 판정(서버 권위) → 판매가 계산(파괴면 Destroyed).
+        local pr = _PotentialService:RollPotential()
+        local calc = _PricingCalculator:Calculate(self.CurrentItemId, pr)
+
+        -- 서버 권위 전체 결과 보관(옵션 3줄 포함). UI 단계에서 Client RPC로 전달.
+        self.CurrentPotential = pr
+        self.CurrentGrade = pr.grade
+        self.CurrentResultType = pr.resultType
+        self.HasPotential = true
+
+        if calc.destroyed then
+            -- 파괴: 판매가 0, 파괴 상태로 전환. 실제 아이템 제거는 확인(RequestConfirmDestroy) 시. (flow §14)
+            self.IsCurrentDestroyed = true
+            self.CurrentPrice = 0
+            log("[GameManager] cube used -> DESTROYED. item=" .. self.CurrentItemId
+                .. ", cubeCount=" .. tostring(self.CubeUseCount) .. ", meso=" .. tostring(self.Meso))
+        else
+            self.IsCurrentDestroyed = false
+            self.CurrentPrice = calc.price
+            log("[GameManager] cube used -> grade=" .. pr.grade .. ", type=" .. pr.resultType
+                .. ", price=" .. tostring(calc.price) .. ", cubeCount=" .. tostring(self.CubeUseCount)
+                .. ", meso=" .. tostring(self.Meso))
+        end
+    end
+
+    @ExecSpace("Server")
+    method void RequestSellItem()
+        -- 판매: 현재 예상 판매가만큼 메소 획득 → 아이템/잠재 상태 정리 → 아이템 선택 상태로. (flow §12)
+        if self.IsGameOver then
+            log_warning("[GameManager] sell rejected: game over")
+            return
+        end
+        if self.CurrentItemId == "" then
+            log_warning("[GameManager] sell rejected: no item")
+            return
+        end
+        -- 파괴된 아이템은 판매할 수 없다. (flow §12·§14)
+        if self.IsCurrentDestroyed then
+            log_warning("[GameManager] sell rejected: item destroyed")
+            return
+        end
+        -- 큐브를 한 번도 안 썼으면 판매가가 없다(3줄 공개 완료 후에만 판매 가능). (cube_scratch §11)
+        if not self.HasPotential then
+            log_warning("[GameManager] sell rejected: cube not used yet")
+            return
+        end
+
+        local gain = self.CurrentPrice
+        local soldId = self.CurrentItemId
+        self.Meso = self.Meso + gain
+        self:ClearItem()
+        log("[GameManager] sold '" .. soldId .. "' (+" .. tostring(gain)
+            .. "), meso=" .. tostring(self.Meso))
+    end
+
+    @ExecSpace("Server")
+    method void RequestConfirmDestroy()
+        -- 파괴 확인: 파괴된 아이템을 제거하고 아이템 선택 상태로 되돌린다. (flow §14-7·8)
+        if self.CurrentItemId == "" then
+            log_warning("[GameManager] confirm rejected: no item")
+            return
+        end
+        if not self.IsCurrentDestroyed then
+            log_warning("[GameManager] confirm rejected: item not destroyed")
+            return
+        end
+        local lostId = self.CurrentItemId
+        self:ClearItem()
+        log("[GameManager] destroyed item '" .. lostId .. "' removed")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void ClearItem()
+        -- 현재 아이템 제거 + 잠재 상태 초기화(판매·파괴 후 공통). (flow §12-5·§14-8)
+        self.CurrentItemId = ""
+        self:ResetPotentialState()
+    end
+
+    @ExecSpace("ServerOnly")
+    method void ResetPotentialState()
+        -- 잠재 결과/판매가 관련 상태를 초기값으로 되돌린다.
+        self.CurrentPotential = nil
+        self.HasPotential = false
+        self.CurrentGrade = ""
+        self.CurrentResultType = ""
+        self.CurrentPrice = 0
+        self.IsCurrentDestroyed = false
+    end
+
     method any GetCurrentEquipment()
-        -- 현재 보유 아이템의 장비 정의 반환. 없으면 nil. (후속 단계에서 사용)
+        -- 현재 보유 아이템의 장비 정의 반환. 없으면 nil. (후속 단계/UI에서 사용)
         if self.CurrentItemId == "" then return nil end
         return _BlacksmithConfig:GetEquipment(self.CurrentItemId)
     end
