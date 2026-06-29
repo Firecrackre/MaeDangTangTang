@@ -42,7 +42,7 @@
 > 일반 MSW 규칙은 위 `@AGENTS.md`(자동 생성) 참조. 아래는 이 프로젝트 고유 컨텍스트(사람 관리, 마커 바깥이라 mswai 재생성에 보존됨).
 
 ## Maps (`map/`)
-- `MainMap`, `YoungMinMap`, `DongHeeMap`, `JiWonMap`
+- `TitleMap`(패키지 시작 맵) / `InGameMap`(무기 상점) / `YoungMinMap`(복권 긁기) / `DongHeeMap` / `JiWonMap`
 
 ## 구현된 기능
 - **대장장이 코어(Blacksmith) — 서버 권위 게임 로직** — `RootDesk/MyDesk/Blacksmith/`.
@@ -51,10 +51,17 @@
     `CubesUntilRepayment` / `IsRepaymentDue` / `PendingRepayment` / `DebtStage` / `IsGameOver`.
     (단, `CurrentPotential` 옵션 3줄은 중첩 테이블이라 `@Sync` 불가 → UI 단계에서 `@ExecSpace("Client")` RPC로 따로 전달.)
   - UI→서버 RPC 엔트리포인트(전부 `@ExecSpace("Server")`, 클라 입력 불신·서버 전량 검증):
-    `_GameManager:RequestBuyItem(equipId)` / `RequestUseCube()` / `RequestSellItem()` /
+    `_GameManager:RequestBuyItem(slotIndex)`(상점 슬롯 인덱스로 구매) / `RequestUseCube()` / `RequestSellItem()` /
     `RequestConfirmDestroy()`(파괴 아이템 정리) / `RequestSettleDebt()`(상환·부족 시 게임오버). UI 버튼을 여기에 연결한다.
   - `PotentialService.mlua` — 잠재 판정(`RollPotential()` → 등급+옵션 3줄). `PricingCalculator.mlua` — 판매가 산정(`Calculate(equipId, pr)` → `{destroyed, price, ...}`).
   - `BlacksmithConfig.mlua` (`@Logic`) — 구현된 밸런스 상수의 SSOT. 시작메소/큐브비용/등급·옵션 확률/장비 5종/빚 상환표 등 모든 수치는 이 파일에서만 조정한다(기획서 값을 옮긴 코드 측 SSOT).
+- **무기 구매 상점(Weapon shop) UI** — `RootDesk/MyDesk/Blacksmith/WeaponShopManager.mlua`(`@Component`, 클라), `ui/WeaponShopGroup.ui`.
+  InGameMap 게이팅(`CurrentMapName` 폴링 + 보드 `Enable` 토글). 서버 권위로 4슬롯 추첨:
+  `GameManager`의 `RollShop()` / `RequestRefreshShop()`(무료 재추첨) / `RequestBuyItem(slotIndex)`.
+  슬롯은 `@Sync string ShopSlotsData`("equipId:grade,…" CSV)로 클라 전달(중첩테이블 @Sync 불가 회피). 한 상점 내 동일 (무기+등급) 조합 중복 없음.
+  - **무기 등급 ≠ 잠재능력 등급.** 상점 등급(`BlacksmithConfig.weaponGrades`: Normal/Fine/Superior/Master)은 판매공식의 **"기본 판매가(basePrice)" 티어**다. 같은 등급이면 무기 종류가 달라도 동일 가격, 무기 종류는 유효 스탯·아이콘만 결정. 구매 시 `CurrentBasePrice` 저장 → `RequestUseCube`에서 `pr.baseOverride`로 넘겨 판매가 계산에 반영(PricingCalculator 시그니처 불변).
+  - 슬롯/상세 아이콘은 아바타 무기 아이템 RUID → `SpriteGUIRendererComponent.ImageRUID`에 `"thumbnail://" .. ruid`로 설정.
+- **클릭 전용 캐릭터 처리** — `RootDesk/MyDesk/Player/ClickOnlyController.mlua`(`@Logic`, 클라). 로컬 플레이어 `Visible=false` + `PlayerControllerComponent.Enable=false`(이동 입력 차단). Global 모델은 읽기전용이라 런타임에서 처리.
 - **복권 긁기(Scratch-ticket) UI** — `RootDesk/MyDesk/ScratchTicket/`, `ui/ScratchTicketGroup.ui`.
   `ScratchTicketManager.mlua`가 3장의 은박 픽셀캔버스(`PixelGUIRendererComponent`)를 숨겨진 "당첨" 레이어 위에 깔고,
   클릭/드래그로 알파를 깎아 긁음(70% 도달 시 완료 이벤트). 격자해상도/브러시반경/강도/완료기준/대상맵은

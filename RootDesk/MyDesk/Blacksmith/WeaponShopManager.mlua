@@ -1,0 +1,465 @@
+@Component
+script WeaponShopManager extends Component
+
+	property string TargetMapName = "InGameMap"
+
+	property number BobAmplitude = 8.0
+
+	property number BobSpeed = 2.5
+
+	property Entity board = "cf3969b5-ae1b-4ca2-961a-cd8d26c03f09"
+
+	property SpriteGUIRendererComponent detailIcon = "3c3a5507-9c1c-45b4-8f4e-ac75002df790"
+
+	property TextComponent detailDesc = "547928f5-c8f0-4a0f-b6ed-7c7674b1d8aa"
+
+	property ButtonComponent buyButton = "19813df1-a0a4-419a-a6a8-ad88a1c2c191"
+
+	property TextComponent mesoText = "ebf29eea-64a5-4f76-8577-d318458ff338"
+
+	property TextComponent repayText = "6e391414-6df0-4807-a7fb-e4a7edaaf580"
+
+	property ButtonComponent refreshButton = "74e6b918-c99b-47e4-85d5-f439731928ce"
+
+	property Entity hud = "5c6b7ca2-1c4e-4b1d-8e1b-a263ebe1f505"
+
+	property Entity placeholder = "57063049-161f-4e58-9696-b8845d5fc01d"
+
+	property Entity timerRoot = "6d150d62-5b27-4492-8af0-f60f120774d6"
+
+	property CanvasGroupComponent timerCanvas = "6d150d62-5b27-4492-8af0-f60f120774d6"
+
+	property SpriteGUIRendererComponent timerFill = "bdaeaa63-1ff4-419b-b025-6e09c8a07365"
+
+	property TextComponent timerLabel = "26932d59-4d55-49ba-95ed-246758e85d79"
+
+	property CanvasGroupComponent timerLabelCanvas = "26932d59-4d55-49ba-95ed-246758e85d79"
+
+	property boolean isActive = false
+
+	property integer selectedSlot = 0
+
+	property string lastShopData = ""
+
+	property string lastHudData = ""
+
+	property any slotEntities = nil
+
+	property any slotData = nil
+
+	property any clickHandlers = nil
+
+	property any buyHandler = nil
+
+	property any refreshHandler = nil
+
+	property any iconEntities = nil
+
+	property any iconBaseY = nil
+
+	property number bobTime = 0
+
+	property integer maxCubes = 5
+
+	property integer currentTime = 0
+
+	property integer roundIndex = 1
+
+	property number warnTime = 0
+
+	property Vector2 timerBasePos = Vector2(0, 0)
+
+	@ExecSpace("ClientOnly")
+	method void OnBeginPlay()
+		        -- 게이팅 초기화: 시작 시 보드를 명시적으로 끈다(변화감지 가드가 초기 상태를 못 잡는 gotcha 회피).
+		        if isvalid(self.board) then
+		            self.board.Enable = false
+		        end
+		        self.isActive = false
+		        self.selectedSlot = 0
+		        self.clickHandlers = {}
+		        self.slotEntities = {}
+		        self.iconEntities = {}
+		        self.iconBaseY = {}
+		        self.bobTime = 0
+		
+		        -- 슬롯 버튼 엔티티 캐시 + 클릭 핸들러 연결(슬롯별 인덱스를 클로저로 캡처).
+		        -- 동시에 둥둥 애니메이션용 Icon 엔티티와 기준 Y(anchoredPosition.y)도 캐싱한다.
+		        if isvalid(self.board) then
+		            for i = 1, 4 do
+		                local e = self.board:GetChildByName("Slot" .. tostring(i), true)
+		                self.slotEntities[i] = e
+		                if isvalid(e) then
+		                    local idx = i
+		                    local h = e:ConnectEvent(ButtonClickEvent, function() self:OnSlotClicked(idx) end)
+		                    table.insert(self.clickHandlers, { entity = e, eventHandler = h })
+		
+		                    local icon = e:GetChildByName("Icon", false)
+		                    self.iconEntities[i] = icon
+		                    if isvalid(icon) and isvalid(icon.UITransformComponent) then
+		                        self.iconBaseY[i] = icon.UITransformComponent.anchoredPosition.y
+		                    end
+		                end
+		            end
+		        end
+		
+		        -- 구입/새로고침 버튼: ConnectEvent는 Entity에서 호출한다(Component 아님).
+		        if isvalid(self.buyButton) then
+		            self.buyHandler = self.buyButton.Entity:ConnectEvent(ButtonClickEvent, self.OnBuyClicked)
+		        end
+		        if isvalid(self.refreshButton) then
+		            self.refreshHandler = self.refreshButton.Entity:ConnectEvent(ButtonClickEvent, self.OnRefreshClicked)
+		        end
+		
+		        self:SetSelectionUI(false)  -- 초기: 미선택 → 중앙 안내 표시 + 구입 비활성
+		
+		        -- 라디얼 타이머 초기화(최대 칸 수는 config의 debtCycle = SSOT).
+		        self.maxCubes = _BlacksmithConfig:GetData().debtCycle
+		        self.currentTime = 0
+		        self.roundIndex = 1
+		        self.warnTime = 0
+		        if isvalid(self.timerRoot) and isvalid(self.timerRoot.UITransformComponent) then
+		            self.timerBasePos = self.timerRoot.UITransformComponent.anchoredPosition
+		        end
+		        if isvalid(self.timerRoot) then
+		            self.timerRoot.Enable = false   -- 맵 게이팅 초기화(board/hud와 동일하게 시작 시 끔)
+		        end
+		        self:UpdateTimer()
+		        log("[WeaponShopManager] ready. slots cached=" .. tostring(#self.slotEntities) .. ", maxCubes=" .. tostring(self.maxCubes))
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnEndPlay()
+		        -- 연결한 이벤트 해제(필수).
+		        if self.clickHandlers ~= nil then
+		            for _, rec in ipairs(self.clickHandlers) do
+		                if isvalid(rec.entity) then
+		                    rec.entity:DisconnectEvent(ButtonClickEvent, rec.eventHandler)
+		                end
+		            end
+		        end
+		        if self.buyHandler ~= nil and isvalid(self.buyButton) then
+		            self.buyButton.Entity:DisconnectEvent(ButtonClickEvent, self.buyHandler)
+		        end
+		        if self.refreshHandler ~= nil and isvalid(self.refreshButton) then
+		            self.refreshButton.Entity:DisconnectEvent(ButtonClickEvent, self.refreshHandler)
+		        end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnUpdate(number delta)
+		        -- 맵 게이팅: InGameMap일 때만 보드 표시.
+		        local lp = _UserService.LocalPlayer
+		        local onMap = isvalid(lp) and lp.CurrentMapName == self.TargetMapName
+		        if onMap ~= self.isActive then
+		            self.isActive = onMap
+		            if isvalid(self.board) then
+		                self.board.Enable = onMap
+		            end
+		            if isvalid(self.hud) then
+		                self.hud.Enable = onMap
+		            end
+		            if isvalid(self.timerRoot) then
+		                self.timerRoot.Enable = onMap   -- 좌측 라디얼도 InGameMap에서만 표시(루트 직속이라 별도 게이팅)
+		            end
+		        end
+		        if not onMap then return end
+		
+		        -- 상점 슬롯 데이터 변화 시 재렌더(서버가 ShopSlotsData를 @Sync로 내려준다).
+		        local data = _GameManager.ShopSlotsData
+		        if data ~= self.lastShopData then
+		            self.lastShopData = data
+		            self:RenderShop(data)
+		        end
+		
+		        -- HUD(메소/상환) 갱신.
+		        self:UpdateHud()
+		
+		        -- 종료 시간 임박 연출(타이머 번쩍/흔들림 + 메소 부족 시 상환필요 텍스트 깜빡임).
+		        self:UpdateWarningFX(delta)
+		
+		        -- 슬롯 아이콘 둥둥 떠다니기(상점이 보일 때만 매 프레임 갱신).
+		        self.bobTime = self.bobTime + delta
+		        self:AnimateIcons()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void AnimateIcons()
+		        -- 4개 슬롯 아이콘을 사인파로 위아래로 둥둥 띄운다(슬롯별 위상차로 자연스럽게).
+		        if self.iconEntities == nil then return end
+		        for i = 1, 4 do
+		            local icon = self.iconEntities[i]
+		            if isvalid(icon) and isvalid(icon.UITransformComponent) then
+		                local baseY = self.iconBaseY[i] or 0
+		                local phase = (i - 1) * (math.pi / 2)  -- 슬롯마다 90도씩 어긋남
+		                local offset = self.BobAmplitude * math.sin(self.bobTime * self.BobSpeed + phase)
+		                local p = icon.UITransformComponent.anchoredPosition
+		                icon.UITransformComponent.anchoredPosition = Vector2(p.x, baseY + offset)
+		            end
+		        end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RenderShop(string data)
+		        -- "equipId:grade,equipId:grade,..." 문자열을 파싱해 4슬롯을 렌더한다.
+		        -- 새 상점(새로고침/구매 후 재추첨)이면 이전 선택은 무효 → 선택 해제 + 중앙 안내 복귀.
+		        self.selectedSlot = 0
+		        self:SetSelectionUI(false)
+		        self.slotData = {}
+		        if data == nil or data == "" then return end
+		
+		        local i = 0
+		        for token in string.gmatch(data, "([^,]+)") do
+		            i = i + 1
+		            local equipId = string.match(token, "([^:]+):")
+		            local grade = string.match(token, ":([^:]+)")
+		            self.slotData[i] = { equipId = equipId, grade = grade }
+		            self:RenderSlot(i, equipId, grade)
+		        end
+		        log("[WeaponShopManager] rendered " .. tostring(i) .. " slots from '" .. data .. "'")
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RenderSlot(integer index, string equipId, string grade)
+		        -- 슬롯 1개 렌더: 아이콘/이름/판매가/구매가/등급 테두리색.
+		        local slot = self.slotEntities[index]
+		        if not isvalid(slot) then return end
+		
+		        local eq = _BlacksmithConfig:GetEquipment(equipId)
+		        local wg = _BlacksmithConfig:GetWeaponGrade(grade)
+		        if eq == nil or wg == nil then return end
+		
+		        -- 등급 테두리색: 슬롯 버튼 배경 틴트.
+		        local sprite = slot.SpriteGUIRendererComponent
+		        if isvalid(sprite) then
+		            sprite.Color = Color(wg.color[1], wg.color[2], wg.color[3], 1.0)
+		        end
+		
+		        -- 아이콘(아바타 무기 아이템 → thumbnail:// 접두사 필요).
+		        local iconEntity = slot:GetChildByName("Icon", false)
+		        if isvalid(iconEntity) and isvalid(iconEntity.SpriteGUIRendererComponent) then
+		            iconEntity.SpriteGUIRendererComponent.ImageRUID = "thumbnail://" .. eq.icon
+		        end
+		
+		        self:SetChildText(slot, "Name", wg.label .. " " .. eq.label)
+		        self:SetChildText(slot, "SellValue", "판매가 " .. self:Comma(wg.basePrice))
+		        self:SetChildText(slot, "Price", self:Comma(wg.buyCost) .. " 메소")
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnSlotClicked(integer index)
+		        -- 슬롯 클릭 → 선택 표시 + 우측 상세 패널 갱신.
+		        if self.slotData == nil or self.slotData[index] == nil then return end
+		        self.selectedSlot = index
+		        local s = self.slotData[index]
+		        local eq = _BlacksmithConfig:GetEquipment(s.equipId)
+		        local wg = _BlacksmithConfig:GetWeaponGrade(s.grade)
+		        if eq == nil or wg == nil then return end
+		
+		        if isvalid(self.detailIcon) then
+		            self.detailIcon.ImageRUID = "thumbnail://" .. eq.icon
+		        end
+		        if isvalid(self.detailDesc) then
+		            self.detailDesc.Text = self:BuildDesc(eq, wg)
+		        end
+		        self:SetSelectionUI(true)  -- 중앙 안내 숨김 + 상세 표시 + 구입 활성
+		        log("[WeaponShopManager] selected slot " .. tostring(index) .. " = " .. s.grade .. " " .. s.equipId)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnBuyClicked()
+		        -- 구입: 선택된 슬롯 인덱스를 서버로 보낸다(서버가 등급/가격 검증·차감·재추첨).
+		        if self.selectedSlot < 1 then
+		            log("[WeaponShopManager] buy ignored: no slot selected")
+		            return
+		        end
+		        log("[WeaponShopManager] request buy slot " .. tostring(self.selectedSlot))
+		        _GameManager:RequestBuyItem(self.selectedSlot)
+		        self:AdvanceTimer()        -- 임시: 구입 시 라디얼 '현재 시간' 1칸 진행(스크래치 연동 전 대체 트리거)
+		        self.selectedSlot = 0      -- 구매 후 선택 해제(상점은 곧 재추첨됨)
+		        self:SetSelectionUI(false) -- 즉시 중앙 안내 복귀 + 구입 비활성
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnRefreshClicked()
+		        -- 새로고침: 서버에 상점 재추첨 요청(메소 차감 없음).
+		        log("[WeaponShopManager] request refresh shop")
+		        _GameManager:RequestRefreshShop()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void AdvanceTimer()
+		        -- 임시 동작: 구입 버튼 클릭마다 '현재 시간' 1칸 진행.
+		        -- maxCubes 도달 후 또 누르면 다음 라운드(1칸)로 래핑하고 상환 스테이지를 올린다.
+		        if self.currentTime >= self.maxCubes then
+		            self.currentTime = 1
+		            self.roundIndex = self.roundIndex + 1
+		        else
+		            self.currentTime = self.currentTime + 1
+		        end
+		        self:UpdateTimer()
+		        log("[WeaponShopManager] timer advance: " .. tostring(self.currentTime) .. "/" .. tostring(self.maxCubes)
+		            .. " round=" .. tostring(self.roundIndex))
+	end
+
+	@ExecSpace("ClientOnly")
+	method void UpdateTimer()
+		        -- 회색 오버레이를 currentTime/maxCubes 만큼 라디얼로 채우고(=경과 시간), 중앙 라벨을 갱신한다.
+		        if isvalid(self.timerFill) then
+		            self.timerFill.FillAmount = self.currentTime / self.maxCubes
+		        end
+		        if isvalid(self.timerLabel) then
+		            self.timerLabel.Text = tostring(self.currentTime) .. "/" .. tostring(self.maxCubes)
+		        end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void UpdateWarningFX(number delta)
+		        -- 임박 연출 2단계:
+		        --   shakeOn(3/5부터): 시계가 주기적으로 짧게 흔들림(부들부들)만.
+		        --   urgentOn(4/5부터): + 라디얼 중앙 "n/5" 라벨이 빨강으로 깜빡, + 메소 부족 시 상환필요메소 빨강↔골드 깜빡.
+		        local goldColor = Color(1, 0.831, 0.475, 1)
+		        local shakeOn = self.currentTime >= (self.maxCubes - 2)   -- 3/5,4/5,5/5
+		        local urgentOn = self.currentTime >= (self.maxCubes - 1)  -- 4/5,5/5
+		
+		        if shakeOn then
+		            self.warnTime = self.warnTime + delta
+		            local blinkOn = (math.floor(self.warnTime / 0.3) % 2 == 0)
+		
+		            -- (a) 부들부들: 2.5초 주기 중 앞 0.35초만 미세 흔들림
+		            if isvalid(self.timerRoot) and isvalid(self.timerRoot.UITransformComponent) then
+		                if (self.warnTime % 2.5) < 0.35 then
+		                    local jx = (_UtilLogic:RandomDouble() - 0.5) * 8
+		                    local jy = (_UtilLogic:RandomDouble() - 0.5) * 8
+		                    self.timerRoot.UITransformComponent.anchoredPosition =
+		                        Vector2(self.timerBasePos.x + jx, self.timerBasePos.y + jy)
+		                else
+		                    self.timerRoot.UITransformComponent.anchoredPosition = self.timerBasePos
+		                end
+		            end
+		
+		            if urgentOn then
+		                -- (b) 라벨 빨강 + 깜빡: FontColor 빨강 고정 + CanvasGroup 알파 토글(글자+외곽선 통째)
+		                if isvalid(self.timerLabel) then
+		                    self.timerLabel.FontColor = Color(1, 0.15, 0.15, 1)
+		                end
+		                if isvalid(self.timerLabelCanvas) then
+		                    self.timerLabelCanvas.GroupAlpha = blinkOn and 1.0 or 0.1
+		                end
+		                -- (c) 메소 부족 시 상환필요메소 텍스트 빨강↔골드
+		                if isvalid(self.repayText) then
+		                    local required = _BlacksmithConfig:GetDebtAmount(self.roundIndex)
+		                    if _GameManager.Meso < required and blinkOn then
+		                        self.repayText.FontColor = Color(1, 0.2, 0.2, 1)
+		                    else
+		                        self.repayText.FontColor = goldColor
+		                    end
+		                end
+		            else
+		                -- 3/5: 흔들리기만 — 라벨/상환텍스트 평상
+		                if isvalid(self.timerLabel) then self.timerLabel.FontColor = Color(1, 1, 1, 1) end
+		                if isvalid(self.timerLabelCanvas) then self.timerLabelCanvas.GroupAlpha = 1.0 end
+		                if isvalid(self.repayText) then self.repayText.FontColor = goldColor end
+		            end
+		        else
+		            -- 평상 복원(<=2/5)
+		            self.warnTime = 0
+		            if isvalid(self.timerRoot) and isvalid(self.timerRoot.UITransformComponent) then
+		                self.timerRoot.UITransformComponent.anchoredPosition = self.timerBasePos
+		            end
+		            if isvalid(self.timerLabel) then self.timerLabel.FontColor = Color(1, 1, 1, 1) end
+		            if isvalid(self.timerLabelCanvas) then self.timerLabelCanvas.GroupAlpha = 1.0 end
+		            if isvalid(self.repayText) then self.repayText.FontColor = goldColor end
+		        end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void UpdateHud()
+		        -- 메소/상환 HUD 텍스트 갱신. '다음 상환까지 큐브 N회' 카운트다운은 좌측 라디얼이 대체하므로,
+		        -- 여기서는 현재 소유 메소 + 이번 라운드 상환 필요 메소만 표시한다(필요액은 roundIndex 기준 config 계산).
+		        -- 현재 소유 메소 색상: 상환 필요 메소 이상이면 초록, 부족하면 빨강(상시).
+		        -- repayText의 FontColor는 건드리지 않는다 — 임박 깜빡임은 UpdateWarningFX가 단독 관리.
+		        local meso = _GameManager.Meso
+		        local required = _BlacksmithConfig:GetDebtAmount(self.roundIndex)
+		        local key = tostring(meso) .. "|" .. tostring(required)
+		        if key == self.lastHudData then return end
+		        self.lastHudData = key
+		
+		        if isvalid(self.mesoText) then
+		            self.mesoText.Text = "현재 소유 메소: " .. self:Comma(meso)
+		            if meso >= required then
+		                self.mesoText.FontColor = Color(0.3, 0.85, 0.3, 1)   -- 충분 → 초록
+		            else
+		                self.mesoText.FontColor = Color(1, 0.3, 0.3, 1)      -- 부족 → 빨강
+		            end
+		        end
+		        if isvalid(self.repayText) then
+		            self.repayText.Text = "상환 필요 메소: " .. self:Comma(required)
+		        end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetSelectionUI(boolean hasSel)
+		        -- 선택/미선택 상태에 따라 UI를 전환한다.
+		        --   미선택: 중앙 안내(placeholder) 표시, 상세 아이콘 숨김·설명 비움, 구입 버튼 비활성.
+		        --   선택:   중앙 안내 숨김, 상세 표시, 구입 버튼 활성.
+		        if isvalid(self.placeholder) then
+		            self.placeholder.Enable = not hasSel
+		        end
+		        if isvalid(self.detailIcon) then
+		            self.detailIcon.Entity.Enable = hasSel  -- 미선택 시 빈 아이콘 박스 숨김
+		        end
+		        if not hasSel and isvalid(self.detailDesc) then
+		            self.detailDesc.Text = ""
+		        end
+		        self:SetBuyEnabled(hasSel)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetBuyEnabled(boolean enabled)
+		        -- 구입 버튼 활성/비활성: 클릭 차단 + 배경 알파로 흐리게.
+		        if not isvalid(self.buyButton) then return end
+		        self.buyButton.Enable = enabled  -- false면 클릭 이벤트 미발생
+		        local sprite = self.buyButton.Entity.SpriteGUIRendererComponent
+		        if isvalid(sprite) then
+		            local a = enabled and 1.0 or 0.35
+		            sprite.Color = Color(0.85, 0.30, 0.30, a)
+		        end
+	end
+
+	method string BuildDesc(any eq, any wg)
+		        -- 무기 상세설명: 유효 옵션 + 큐브 전략 안내(potential_determination 기준).
+		        local d = _BlacksmithConfig:GetData()
+		        local statLabel = d.mainOptions[eq.stat].label
+		        local atkLabels = {}
+		        for _, a in ipairs(eq.atk) do
+		            table.insert(atkLabels, d.mainOptions[a].label)
+		        end
+		        return wg.label .. " " .. eq.label .. "\n"
+		            .. "기본 판매가: " .. self:Comma(wg.basePrice) .. " 메소\n"
+		            .. "유효 주스탯: " .. statLabel .. "\n"
+		            .. "유효 공격 계열: " .. table.concat(atkLabels, ", ")
+	end
+
+	method string Comma(integer n)
+		        -- 천 단위 콤마 문자열(음수 미고려 — 가격/메소용).
+		        local s = tostring(n)
+		        local out = ""
+		        local cnt = 0
+		        for i = #s, 1, -1 do
+		            out = string.sub(s, i, i) .. out
+		            cnt = cnt + 1
+		            if cnt % 3 == 0 and i > 1 then out = "," .. out end
+		        end
+		        return out
+	end
+
+	method void SetChildText(any parent, string childName, string text)
+		        -- 자식 엔티티의 TextComponent.Text를 설정한다(없으면 무시).
+		        local c = parent:GetChildByName(childName, false)
+		        if isvalid(c) and isvalid(c.TextComponent) then
+		            c.TextComponent.Text = text
+		        end
+	end
+
+end

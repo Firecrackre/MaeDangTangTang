@@ -16,6 +16,16 @@ script GameManager extends Logic
     @Sync property boolean IsRepaymentDue = false  -- 상환 시점 도달(미납) 여부
     @Sync property integer PendingRepayment = 0    -- 이번에 갚아야 할 금액
 
+    -- 상점(무기 구매 UI) 상태.
+    --   ShopSlots: 서버 권위 슬롯 배열 {{equipId, grade}, ...} (중첩이라 @Sync 불가 → 서버 보관).
+    --   ShopSlotsData: 위 배열을 직렬화한 @Sync 문자열 "equipId:grade,equipId:grade,...". 클라가 파싱해 렌더.
+    property any ShopSlots = nil
+    @Sync property string ShopSlotsData = ""
+
+    -- 구매한 아이템의 무기 등급 정보(상점 등급 = 기본 판매가 티어). 판매가 계산의 base로 사용.
+    @Sync property integer CurrentBasePrice = 0    -- 현재 아이템의 기본 판매가(구매 등급 basePrice)
+    @Sync property string CurrentWeaponGrade = ""  -- 현재 아이템의 무기 등급 key(Normal/Fine/...)
+
     -- 현재 아이템의 잠재 결과 요약(@Sync로 HUD가 읽음). 옵션 3줄 전체는 아래 CurrentPotential에 보관. (flow §8)
     @Sync property boolean HasPotential = false      -- 현재 아이템에 큐브를 1회 이상 사용했는지
     @Sync property string CurrentGrade = ""          -- 현재 잠재 등급(Rare/Epic/Unique/Legendary)
@@ -40,22 +50,55 @@ script GameManager extends Logic
         self.PendingRepayment = 0
         self:UpdateRepaymentCountdown()  -- 시작 시 '다음 상환까지 남은 큐브' 표시 (flow §5-4)
         self:ResetPotentialState()
+        self:RollShop()  -- 시작 시 상점 슬롯 구성 (concept §6-1)
         log("[GameManager] session start. meso=" .. tostring(self.Meso)
             .. ", nextRepayIn=" .. tostring(self.CubesUntilRepayment))
     end
 
+    @ExecSpace("ServerOnly")
+    method void RollShop()
+        -- 상점 슬롯을 무작위로 재구성한다(서버 권위). 각 슬롯 = 무작위 무기 종류 + 무작위 무기 등급.
+        -- 확률·등급은 BlacksmithConfig가 SSOT. 결과는 @Sync 문자열로 직렬화해 클라에 전달.
+        -- 한 상점 내에서 동일 (무기종류+등급) 조합은 중복되지 않는다(같은 종류라도 등급이 다르면 허용).
+        local d = _BlacksmithConfig:GetData()
+        local order = d.equipmentOrder
+        local slots = {}
+        local parts = {}
+        local seen = {}
+        for i = 1, d.shopSlotCount do
+            local equipId, grade, key
+            local tries = 0
+            repeat
+                equipId = order[_UtilLogic:RandomIntegerRange(1, #order)]
+                grade = _BlacksmithConfig:RollWeaponGrade()
+                key = equipId .. ":" .. grade
+                tries = tries + 1
+            until seen[key] == nil or tries >= 50  -- 중복이면 재추첨(20조합이라 상한 도달 사실상 없음)
+            seen[key] = true
+            slots[i] = { equipId = equipId, grade = grade }
+            parts[i] = key
+        end
+        self.ShopSlots = slots
+        self.ShopSlotsData = table.concat(parts, ",")
+        log("[GameManager] shop rolled: " .. self.ShopSlotsData)
+    end
+
     @ExecSpace("Server")
-    method void RequestBuyItem(string equipId)
-        -- 아이템 구매: 메소 검증 → 차감 → 현재 아이템 등록 (flow §6).
-        -- 클라이언트 입력(equipId)은 신뢰하지 않고 서버에서 전부 검증한다.
+    method void RequestRefreshShop()
+        -- '새로고침' 버튼: 메소 차감 없이 상점을 재추첨한다(개발/테스트 편의 + concept §6-1 선택 갱신).
         if self.IsGameOver then
-            log_warning("[GameManager] buy rejected: game over")
+            log_warning("[GameManager] refresh rejected: game over")
             return
         end
+        self:RollShop()
+    end
 
-        local eq = _BlacksmithConfig:GetEquipment(equipId)
-        if eq == nil then
-            log_warning("[GameManager] buy rejected: unknown equip '" .. tostring(equipId) .. "'")
+    @ExecSpace("Server")
+    method void RequestBuyItem(integer slotIndex)
+        -- 아이템 구매: 슬롯 인덱스 검증 → 등급 가격 차감 → 현재 아이템 등록 → 상점 재추첨 (flow §6).
+        -- 클라 입력(slotIndex)은 신뢰하지 않고, 서버 자신의 ShopSlots에서 등급/가격을 읽어 검증한다(위조 차단).
+        if self.IsGameOver then
+            log_warning("[GameManager] buy rejected: game over")
             return
         end
 
@@ -65,18 +108,36 @@ script GameManager extends Logic
             return
         end
 
-        -- 보유 메소 부족 시 구매 불가
-        if self.Meso < eq.buyCost then
-            log_warning("[GameManager] buy rejected: not enough meso (" .. tostring(self.Meso)
-                .. " < " .. tostring(eq.buyCost) .. ")")
+        -- 슬롯 인덱스 유효성 검증 (서버 권위 ShopSlots 기준)
+        if self.ShopSlots == nil or slotIndex < 1 or slotIndex > #self.ShopSlots then
+            log_warning("[GameManager] buy rejected: invalid slot " .. tostring(slotIndex))
+            return
+        end
+        local slot = self.ShopSlots[slotIndex]
+        local eq = _BlacksmithConfig:GetEquipment(slot.equipId)
+        local grade = _BlacksmithConfig:GetWeaponGrade(slot.grade)
+        if eq == nil or grade == nil then
+            log_warning("[GameManager] buy rejected: bad slot data " .. tostring(slot.equipId)
+                .. "/" .. tostring(slot.grade))
             return
         end
 
-        self.Meso = self.Meso - eq.buyCost
-        self.CurrentItemId = equipId
+        -- 보유 메소 부족 시 구매 불가
+        if self.Meso < grade.buyCost then
+            log_warning("[GameManager] buy rejected: not enough meso (" .. tostring(self.Meso)
+                .. " < " .. tostring(grade.buyCost) .. ")")
+            return
+        end
+
+        self.Meso = self.Meso - grade.buyCost
+        self.CurrentItemId = slot.equipId
+        self.CurrentBasePrice = grade.basePrice   -- 구매 등급의 기본 판매가(판매가 계산 base)
+        self.CurrentWeaponGrade = slot.grade
         self:ResetPotentialState()  -- 새 아이템은 잠재 미사용 상태에서 시작
-        log("[GameManager] bought '" .. eq.label .. "' (-" .. tostring(eq.buyCost)
-            .. "), meso=" .. tostring(self.Meso) .. ", item=" .. self.CurrentItemId)
+        self:RollShop()             -- 구매한 무기는 작업대로 가져갔으므로 상점을 새로 채운다
+        log("[GameManager] bought '" .. grade.label .. " " .. eq.label .. "' (-"
+            .. tostring(grade.buyCost) .. "), basePrice=" .. tostring(self.CurrentBasePrice)
+            .. ", meso=" .. tostring(self.Meso) .. ", item=" .. self.CurrentItemId)
     end
 
     @ExecSpace("Server")
@@ -127,7 +188,9 @@ script GameManager extends Logic
         self:UpdateRepaymentCountdown()
 
         -- 잠재능력 판정(서버 권위) → 판매가 계산(파괴면 Destroyed).
+        -- 기본 판매가는 구매한 무기 등급(CurrentBasePrice)을 baseOverride로 넘긴다(상점 등급 = 기본 판매가).
         local pr = _PotentialService:RollPotential()
+        pr.baseOverride = self.CurrentBasePrice
         local calc = _PricingCalculator:Calculate(self.CurrentItemId, pr)
 
         -- 서버 권위 전체 결과 보관(옵션 3줄 포함). UI 단계에서 Client RPC로 전달.
@@ -201,6 +264,8 @@ script GameManager extends Logic
     method void ClearItem()
         -- 현재 아이템 제거 + 잠재 상태 초기화(판매·파괴 후 공통). (flow §12-5·§14-8)
         self.CurrentItemId = ""
+        self.CurrentBasePrice = 0
+        self.CurrentWeaponGrade = ""
         self:ResetPotentialState()
     end
 

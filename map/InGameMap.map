@@ -1,7 +1,7 @@
 {
   "Id": "",
   "GameId": "",
-  "EntryKey": "map://mainmap",
+  "EntryKey": "map://ingamemap",
   "ContentType": "x-mod/map",
   "Content": "",
   "Usage": 0,
@@ -14,13 +14,13 @@
     "Use": "Binary",
     "Entities": [
       {
-        "id": "2dd408bf-403b-4a16-a4b9-844e3298d53a",
-        "path": "/maps/MainMap",
+        "id": "384b6e08-852d-4d52-89db-c290ffb20a18",
+        "path": "/maps/InGameMap",
         "componentNames": "MOD.Core.MapComponent,MOD.Core.FootholdComponent",
         "jsonString": {
-          "name": "MainMap",
-          "path": "/maps/MainMap",
-          "nameEditable": true,
+          "name": "InGameMap",
+          "path": "/maps/InGameMap",
+          "nameEditable": false,
           "enable": true,
           "visible": true,
           "localize": false,
@@ -45,12 +45,12 @@
         }
       },
       {
-        "id": "3ea6a2ad-4f4f-49b9-b545-696a6bb4aa9e",
-        "path": "/maps/MainMap/Background",
+        "id": "367b8875-9fc4-4723-914f-4b34f29e13c1",
+        "path": "/maps/InGameMap/Background",
         "componentNames": "MOD.Core.BackgroundComponent",
         "jsonString": {
           "name": "Background",
-          "path": "/maps/MainMap/Background",
+          "path": "/maps/InGameMap/Background",
           "nameEditable": false,
           "enable": true,
           "visible": true,
@@ -71,12 +71,12 @@
         }
       },
       {
-        "id": "ec67f7a7-f51d-40ce-8987-15d24b40b2d4",
-        "path": "/maps/MainMap/MapleMapLayer",
+        "id": "57ea30e7-4cc0-46c7-809b-25ec143a06bf",
+        "path": "/maps/InGameMap/MapleMapLayer",
         "componentNames": "MOD.Core.MapLayerComponent",
         "jsonString": {
           "name": "MapleMapLayer",
-          "path": "/maps/MainMap/MapleMapLayer",
+          "path": "/maps/InGameMap/MapleMapLayer",
           "nameEditable": false,
           "enable": true,
           "visible": true,
@@ -107,12 +107,12 @@
         }
       },
       {
-        "id": "672ecd3e-f47c-4fd3-a769-e1ef445ecd38",
-        "path": "/maps/MainMap/TileMap",
+        "id": "ecb67660-95b8-4669-9ddc-0735cbc62338",
+        "path": "/maps/InGameMap/TileMap",
         "componentNames": "MOD.Core.TransformComponent,MOD.Core.TileMapComponent",
         "jsonString": {
           "name": "TileMap",
-          "path": "/maps/MainMap/TileMap",
+          "path": "/maps/InGameMap/TileMap",
           "nameEditable": false,
           "enable": true,
           "visible": true,

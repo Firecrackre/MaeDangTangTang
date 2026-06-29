@@ -1,0 +1,24 @@
+@Logic
+script ClickOnlyController extends Logic
+    -- 클릭 전용 게임 유지: 횡스크롤 캐릭터가 필요 없으므로 로컬 플레이어 캐릭터를 숨기고
+    -- 이동 입력을 막는다(컨트롤러 비활성). Global/DefaultPlayer.model은 읽기 전용이라 런타임에서 처리한다.
+    -- 클라이언트에서만 동작하며, 로컬 플레이어가 준비되면 1회만 적용한다.
+
+    property boolean applied = false
+
+    @ExecSpace("ClientOnly")
+    method void OnUpdate(number delta)
+        -- 로컬 플레이어가 생성되면 캐릭터를 숨기고 컨트롤러를 끈다(최초 1회).
+        if self.applied then return end
+        local lp = _UserService.LocalPlayer
+        if not isvalid(lp) then return end
+
+        lp.Visible = false  -- 아바타 렌더 숨김
+        local pcc = lp.PlayerControllerComponent
+        if isvalid(pcc) then
+            pcc.Enable = false  -- 키 입력 → 이동/점프 액션 처리 비활성
+        end
+        self.applied = true
+        log("[ClickOnlyController] local player hidden + controller disabled (click-only)")
+    end
+end
