@@ -1,7 +1,7 @@
 {
   "Id": "",
   "GameId": "",
-  "EntryKey": "directory://3dba2058e8534e6abec23e28be337399",
+  "EntryKey": "directory://9287603d13ad4d9fa9fe8201b0ba25f2",
   "ContentType": "x-mod/directory",
   "Content": "",
   "Usage": 0,
@@ -13,8 +13,8 @@
   "ContentProto": {
     "Use": "Json",
     "Json": {
-      "entry_id": "directory://3dba2058e8534e6abec23e28be337399",
-      "name": "MyDesk",
+      "entry_id": "directory://9287603d13ad4d9fa9fe8201b0ba25f2",
+      "name": "Blacksmith",
       "lock": false,
       "folding": false,
       "nameEditable": true

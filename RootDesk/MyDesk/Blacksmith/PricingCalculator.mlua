@@ -1,0 +1,103 @@
+@Logic
+script PricingCalculator extends Logic
+    -- 판매가 계산(결정론적 순수 함수). 잠재능력 결과 + 현재 장비를 받아 최종 판매가를 산정한다.
+    -- 핵심: 장비별 '유효 옵션'만 높은 가치로 계산하고, 조합보너스·이탈배수도 유효 옵션 기준만 반영한다. (pricing_calculation.md)
+    --   공식: (기본판매가 + 옵션보너스 총합 + 조합보너스) × 등급배수 × 이탈배수, 1,000 단위 반올림.
+    --   파괴 포함 시 계산 중단 → Destroyed 반환. (5번에서 다루는 단락 처리)
+
+    method void OnBeginPlay()
+        log("[PricingCalculator] ready")
+    end
+
+    method any Calculate(string equipId, any pr)
+        -- equipId: 현재 장비 id, pr: PotentialService 결과 데이터.
+        -- 반환: { destroyed, price, ... } — destroyed=true면 판매 불가(Destroyed).
+        local d = _BlacksmithConfig:GetData()
+        local eq = _BlacksmithConfig:GetEquipment(equipId)
+        if eq == nil then
+            return { destroyed = false, price = 0, comboKey = "", error = "unknown equip" }
+        end
+        -- 기본판매가: 보통은 장비 정의값. pr.baseOverride가 있으면 그 값 사용(가상계산/회귀테스트용).
+        local base = eq.basePrice
+        if pr.baseOverride ~= nil then base = pr.baseOverride end
+
+        -- 파괴 우선: 3줄 중 파괴 포함 시 계산하지 않고 Destroyed (pricing §13)
+        if pr.hasDestroy then
+            return { destroyed = true, price = 0, base = base, comboKey = "" }
+        end
+
+        -- 옵션 보너스 합 + 유효 옵션 집계 (pricing §8·§9)
+        local optionBonusSum = 0
+        local validStatCount, validAttackCount, validMainCount, validBonusCount = 0, 0, 0, 0
+        for _, o in ipairs(pr.options) do
+            if o.optionType == "Junk" then
+                local j = d.junkOptions[o.optionName]
+                optionBonusSum += (j ~= nil and j.bonus or 0)
+            elseif o.optionType == "Main" then
+                if _BlacksmithConfig:IsValidMain(equipId, o.optionName) then
+                    validMainCount += 1
+                    if o.optionGroup == "MainStat" then
+                        validStatCount += 1
+                        optionBonusSum += d.optionBonus.validStat
+                    else
+                        -- 유효 공격계열: 보스공격력은 별도 보너스
+                        if o.optionName == "BATK" then
+                            optionBonusSum += d.optionBonus.validBatk
+                        else
+                            optionBonusSum += d.optionBonus.validAtk
+                        end
+                        validAttackCount += 1
+                    end
+                    if o.isBonusValue then validBonusCount += 1 end  -- 유효 이탈만 집계
+                else
+                    optionBonusSum += d.optionBonus.invalidMain  -- 비유효 주요 옵션
+                end
+            end
+        end
+
+        -- 조합 보너스: 유효 기준, 최고 우선순위 1개만 적용 (pricing §10)
+        -- (유효 주스탯은 장비당 1종뿐이므로 validStatCount==3이면 동일 주스탯 3줄이 성립)
+        local comboKey = ""
+        local sameStat3 = (validStatCount == 3)
+        if validAttackCount == 3 and validBonusCount == 3 then
+            comboKey = "godAttack"
+        elseif sameStat3 and validBonusCount == 3 then
+            comboKey = "legendStat"
+        elseif validAttackCount == 3 then
+            comboKey = "attack3"
+        elseif sameStat3 then
+            comboKey = "sameStat3"
+        elseif validMainCount == 3 then
+            comboKey = "main3"
+        elseif validMainCount == 2 and validBonusCount >= 1 then
+            comboKey = "main2bonus"
+        end
+
+        local comboBonus = 0
+        if comboKey ~= "" then
+            for _, c in ipairs(d.comboBonus) do
+                if c.key == comboKey then comboBonus = c.bonus end
+            end
+        end
+
+        -- 최종 계산 (pricing §4)
+        local gradeMult = _BlacksmithConfig:GetGradeMultiplier(pr.grade)
+        local bonusMult = _BlacksmithConfig:GetBonusMultiplier(validBonusCount)
+        local raw = (base + optionBonusSum + comboBonus) * gradeMult * bonusMult
+        local rounded = math.floor(raw / 1000 + 0.5) * 1000  -- 1,000 단위 반올림 (pricing §16)
+
+        return {
+            destroyed = false,
+            price = rounded,
+            rawPrice = raw,
+            base = base,
+            optionBonusSum = optionBonusSum,
+            comboKey = comboKey,
+            comboBonus = comboBonus,
+            gradeMult = gradeMult,
+            bonusMult = bonusMult,
+            validMainCount = validMainCount,
+            validBonusCount = validBonusCount,
+        }
+    end
+end

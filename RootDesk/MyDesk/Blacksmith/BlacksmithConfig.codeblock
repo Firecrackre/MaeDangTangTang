@@ -1,0 +1,33 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "codeblock://c80f1d9b-4006-4973-b4c9-16e2ccf0b75f",
+  "ContentType": "x-mod/codeblock",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "CoreVersion": {
+        "Major": 0,
+        "Minor": 2
+      },
+      "ScriptVersion": {
+        "Major": 1,
+        "Minor": 1
+      },
+      "Description": "",
+      "Id": "c80f1d9b-4006-4973-b4c9-16e2ccf0b75f",
+      "Language": 1,
+      "Name": "BlacksmithConfig",
+      "Type": 5,
+      "Source": 0,
+      "Target": null
+    }
+  }
+}
