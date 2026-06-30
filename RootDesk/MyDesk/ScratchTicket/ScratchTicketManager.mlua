@@ -9,9 +9,10 @@ script ScratchTicketManager extends Component
     property integer GridHeight = 8           -- foil pixel-grid height per line
     property number BrushRadius = 2.0         -- erase circle radius (pixel units)
     property number EraseStrength = 30        -- 0~100. alpha removed per touch = EraseStrength/100
-    property number CompletionThreshold = 0.7 -- foil fraction cleared to auto-complete a line
+    property number CompletionThreshold = 0.7 -- foil alpha fraction removed to auto-complete a line
     property string TargetMapName = "InGameMap" -- gate the popup to this map
     property string ConfigDataSetName = "ScratchTicketConfig" -- grid/brush tuning data table
+    property boolean UseConfigDataSet = false -- true면 CSV가 위 인스펙터 값을 덮어씀. false(기본)면 인스펙터가 SSOT.
 
     -- ===== Bound entities (UUIDs: existing preserved / new injected by UI builder) =====
     property Entity board = "7efccaf4-7947-4708-bb07-6a1aba564e1f"
@@ -74,6 +75,7 @@ script ScratchTicketManager extends Component
     property any touchHandler = nil
     property any holdHandler = nil
     property boolean isActive = false
+    property boolean scratchReady = false   -- 큐브 사용 후(은박 3줄 표시) 긁기 허용. 대기/맵이탈 시 false → 부스러기 방지.
     property any crumbs = nil
     property integer crumbCursor = 0
 
@@ -102,7 +104,8 @@ script ScratchTicketManager extends Component
     @ExecSpace("ClientOnly")
     method void OnBeginPlay()
         -- 큐브 스크래치 UI 초기화: 설정 로드 → foil/크럼 구성 → 입력/버튼/호버 연결 → 대기 상태로 숨김.
-        self:LoadConfig()
+        -- 기본은 인스펙터 값을 SSOT로 사용(에디터에서 바꾸면 즉시 반영). CSV 구동을 원하면 UseConfigDataSet을 켠다.
+        if self.UseConfigDataSet then self:LoadConfig() end
         self.tickets = {}
         self:RegisterTicket(1, self.foil1)
         self:RegisterTicket(2, self.foil2)
@@ -300,6 +303,7 @@ script ScratchTicketManager extends Component
         if isvalid(self.hud) then self.hud.Enable = on end
         if not on and isvalid(self.priceWindow) then self.priceWindow.Enable = false end
         if not on then self:HideConfirmSell() end
+        if not on then self.scratchReady = false end   -- 맵 이탈/아이템 없음 → 긁기 차단.
     end
 
     @ExecSpace("ClientOnly")
@@ -316,6 +320,7 @@ script ScratchTicketManager extends Component
         self.revealedCount = 0
         self.rainbowLines = {}
         self.destroyPending = false
+        self.scratchReady = false   -- 대기 상태에서는 긁기 차단(큐브 사용 전 부스러기 방지).
     end
 
     @ExecSpace("ClientOnly")
@@ -375,6 +380,7 @@ script ScratchTicketManager extends Component
         if isvalid(self.priceWindow) then self.priceWindow.Enable = false end
         self:SetButtonEnabled(self.reuseButton, false)
         self:SetButtonEnabled(self.sellButton, false)
+        self.scratchReady = true   -- 은박 3줄 표시 완료 → 이제부터 긁기 허용.
         log("[ScratchTicket] setup scratch: grade=" .. (fields[2] or "?") .. " cube=" .. self.lastCubeType)
     end
 
@@ -437,6 +443,7 @@ script ScratchTicketManager extends Component
     method void Scratch(Vector2 touchPoint, integer touchId)
         -- 터치를 각 줄 사각형(게임 월드 좌표)에 히트테스트해 브러시 반경 내 알파를 깎는다.
         if not self.isActive then return end
+        if not self.scratchReady then return end  -- 큐브 사용 전(은박 미표시)에는 긁기/부스러기 차단.
         if touchId < 1 then return end
         if self.tickets == nil then return end
         if self.revealedCount >= 3 then return end  -- 모두 공개되면 긁기 불필요
@@ -486,11 +493,14 @@ script ScratchTicketManager extends Component
                     local idx = (py - 1) * W + px
                     local a = t.alpha[idx]
                     if a > 0 then
+                        local prev = a
                         a = a - dec
                         if a < 0 then a = 0 end
                         t.alpha[idx] = a
                         t.pixel:SetPixel(px, py, Color(0.78, 0.78, 0.82, a))
-                        if a <= 0 then t.cleared = t.cleared + 1 end
+                        -- 부분 제거도 즉시 누적: cleared = 제거된 알파 총량, total = W*H(전체 알파량).
+                        -- 따라서 cleared/total = "전체 은박 알파의 제거 비율" → CompletionThreshold가 직관적으로 동작.
+                        t.cleared = t.cleared + (prev - a)
                     end
                 end
             end
