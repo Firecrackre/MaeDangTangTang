@@ -24,8 +24,19 @@ script BlacksmithConfig extends Logic
 
         -- 시작/재화 기본값 (flow §5, concept §6-2)
         d.startMeso = 40000
-        d.cubeCost = 5000              -- 이상한 큐브 사용 비용
+        d.cubeCost = 5000              -- 이상한 큐브 사용 비용(폴백 — d.cubes.weird.cost가 SSOT)
         d.bonusChance = 15             -- 이탈 확률(%) — 주요 옵션 1줄당 (potential §8)
+
+        -- 큐브 종류 (concept §6-2, potential §12). 메커톤: 이상한 큐브 + 장인의 큐브 2종.
+        --   cost: 1회 사용 비용. allowDestroy: 파괴 항목 등장 가능 여부(장인의 큐브는 false → 파괴 없음).
+        --   icon: 큐브 아이콘 스프라이트 RUID(좌하단 큐브 선택 UI / 중앙 큐브 아이콘). 빈 값 금지.
+        d.cubeOrder = {"weird", "master"}
+        --   ⚠ icon은 plain 스프라이트 RUID(thumbnail:// 접두사 없이 ImageRUID에 직접 설정). 메이플 공식 큐브 아이콘.
+        --   이상한 큐브=수상한 큐브, 장인의 큐브=블랙 큐브 (msw-search 리소스 검색).
+        d.cubes = {
+            weird  = { key = "weird",  label = "이상한 큐브", cost = 5000,  allowDestroy = true,  icon = "31e4268ff65b4281abd509162ca199e3" },
+            master = { key = "master", label = "장인의 큐브", cost = 15000, allowDestroy = false, icon = "1edec01f822c422293f62729e7462a22" },
+        }
 
         -- 등급 (potential §4)
         d.gradeOrder = {"Rare", "Epic", "Unique", "Legendary"}
@@ -132,6 +143,11 @@ script BlacksmithConfig extends Logic
     method any GetWeaponGrade(string key)
         -- 무기 등급 1종 정의 반환(basePrice/buyCost/color/label). 알 수 없는 key면 nil.
         return self:GetData().weaponGrades[key]
+    end
+
+    method any GetCube(string key)
+        -- 큐브 1종 정의 반환(cost/allowDestroy/icon/label). 알 수 없는 key면 nil.
+        return self:GetData().cubes[key]
     end
 
     method any GetWeaponGradeOrder()

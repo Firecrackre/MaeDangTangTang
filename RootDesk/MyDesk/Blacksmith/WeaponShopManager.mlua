@@ -148,9 +148,10 @@ script WeaponShopManager extends Component
 
 	@ExecSpace("ClientOnly")
 	method void OnUpdate(number delta)
-		        -- 맵 게이팅: InGameMap일 때만 보드 표시.
+		        -- 맵 게이팅: InGameMap이면서 아직 아이템을 구매하지 않았을 때만 상점 표시.
+		        -- 아이템 구매 시(CurrentItemId ~= "") 상점은 숨고 큐브 스크래치 UI가 대신 노출된다.
 		        local lp = _UserService.LocalPlayer
-		        local onMap = isvalid(lp) and lp.CurrentMapName == self.TargetMapName
+		        local onMap = isvalid(lp) and lp.CurrentMapName == self.TargetMapName and (_GameManager.CurrentItemId == "")
 		        if onMap ~= self.isActive then
 		            self.isActive = onMap
 		            if isvalid(self.board) then
@@ -164,7 +165,13 @@ script WeaponShopManager extends Component
 		            end
 		        end
 		        if not onMap then return end
-		
+
+		        -- 시계/HUD는 서버 권위 큐브 사용 횟수·상환 단계로 구동(임시 클라 카운터 대체).
+		        self.currentTime = _GameManager.CubeUseCount % self.maxCubes
+		        if _GameManager.IsRepaymentDue then self.currentTime = self.maxCubes end
+		        self.roundIndex = _GameManager.DebtStage + 1
+		        self:UpdateTimer()
+
 		        -- 상점 슬롯 데이터 변화 시 재렌더(서버가 ShopSlotsData를 @Sync로 내려준다).
 		        local data = _GameManager.ShopSlotsData
 		        if data ~= self.lastShopData then
@@ -275,7 +282,7 @@ script WeaponShopManager extends Component
 		        end
 		        log("[WeaponShopManager] request buy slot " .. tostring(self.selectedSlot))
 		        _GameManager:RequestBuyItem(self.selectedSlot)
-		        self:AdvanceTimer()        -- 임시: 구입 시 라디얼 '현재 시간' 1칸 진행(스크래치 연동 전 대체 트리거)
+		        -- 시계 진행은 큐브 사용(서버 CubeUseCount) 기준으로만 일어난다(구매 시 진행 제거).
 		        self.selectedSlot = 0      -- 구매 후 선택 해제(상점은 곧 재추첨됨)
 		        self:SetSelectionUI(false) -- 즉시 중앙 안내 복귀 + 구입 비활성
 	end

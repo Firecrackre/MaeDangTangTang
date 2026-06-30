@@ -34,8 +34,12 @@ script GameManager extends Logic
     @Sync property boolean IsCurrentDestroyed = false -- 현재 아이템 파괴 여부 (flow §14)
 
     -- 잠재 결과 전체(등급+옵션 3줄). 중첩 테이블이라 @Sync 불가 → 서버 권위 보관용.
-    --   UI 단계에서 큐브 사용 시 @ExecSpace("Client") RPC로 클라이언트에 따로 전달한다.
     property any CurrentPotential = nil
+
+    -- 옵션 3줄을 클라(스크래치 UI)에 전달하기 위한 @Sync 직렬화 문자열(ShopSlotsData와 동일 패턴).
+    --   포맷: "grade;line;line;line", line = "label|value|unit|optionType|isBonus|isDestroy|isValid".
+    --   isValid는 서버가 IsValidMain(현재장비, optionName)으로 계산(클라 신뢰 안 함). 없으면 "".
+    @Sync property string CurrentPotentialData = ""
 
     @ExecSpace("ServerOnly")
     method void OnBeginPlay()
@@ -141,9 +145,10 @@ script GameManager extends Logic
     end
 
     @ExecSpace("Server")
-    method void RequestUseCube()
+    method void RequestUseCube(string cubeType)
         -- 큐브 사용: 비용 차감 → 횟수 증가 → 잠재 판정 → 판매가 계산 → 결과 보관. (flow §7·§13)
         -- 최초 사용과 '한 번 더 사용하기'는 둘 다 "현재 아이템에 큐브 사용"이라 이 메서드로 함께 처리한다.
+        -- cubeType: "weird"(이상한, 파괴 가능) / "master"(장인, 파괴 없음). 알 수 없으면 weird 폴백(클라 입력 불신).
         if self.IsGameOver then
             log_warning("[GameManager] cube rejected: game over")
             return
@@ -165,15 +170,20 @@ script GameManager extends Logic
         end
 
         local d = _BlacksmithConfig:GetData()
-        if self.Meso < d.cubeCost then
+        -- 큐브 종류 해석(클라 입력 불신 → 서버가 config에서 비용/파괴여부 확정). 알 수 없으면 weird 폴백.
+        local cube = _BlacksmithConfig:GetCube(cubeType)
+        if cube == nil then
+            cube = _BlacksmithConfig:GetCube("weird")
+        end
+        if self.Meso < cube.cost then
             log_warning("[GameManager] cube rejected: not enough meso (" .. tostring(self.Meso)
-                .. " < " .. tostring(d.cubeCost) .. ")")
+                .. " < " .. tostring(cube.cost) .. ")")
             return
         end
 
         -- 비용 차감 + 큐브 사용 횟수 1 증가 (flow §7-4·5).
         -- '한 번 더 사용하기' 시 기존 잠재/판매가는 새 결과로 덮어쓴다 (flow §13).
-        self.Meso = self.Meso - d.cubeCost
+        self.Meso = self.Meso - cube.cost
         self.CubeUseCount = self.CubeUseCount + 1
 
         -- 상환 주기(기본 5회) 경계 도달 시 상환 예정 상태로 전환 (concept §6-3, flow §15).
@@ -189,14 +199,16 @@ script GameManager extends Logic
 
         -- 잠재능력 판정(서버 권위) → 판매가 계산(파괴면 Destroyed).
         -- 기본 판매가는 구매한 무기 등급(CurrentBasePrice)을 baseOverride로 넘긴다(상점 등급 = 기본 판매가).
-        local pr = _PotentialService:RollPotential()
+        -- 파괴 허용 여부는 큐브 종류로 결정(장인의 큐브는 파괴 없음).
+        local pr = _PotentialService:RollPotential(cube.allowDestroy)
         pr.baseOverride = self.CurrentBasePrice
         local calc = _PricingCalculator:Calculate(self.CurrentItemId, pr)
 
-        -- 서버 권위 전체 결과 보관(옵션 3줄 포함). UI 단계에서 Client RPC로 전달.
+        -- 서버 권위 전체 결과 보관(옵션 3줄 포함) + 클라 전달용 직렬화.
         self.CurrentPotential = pr
         self.CurrentGrade = pr.grade
         self.CurrentResultType = pr.resultType
+        self.CurrentPotentialData = self:SerializePotential(pr)
         self.HasPotential = true
 
         if calc.destroyed then
@@ -230,18 +242,20 @@ script GameManager extends Logic
             log_warning("[GameManager] sell rejected: item destroyed")
             return
         end
-        -- 큐브를 한 번도 안 썼으면 판매가가 없다(3줄 공개 완료 후에만 판매 가능). (cube_scratch §11)
-        if not self.HasPotential then
-            log_warning("[GameManager] sell rejected: cube not used yet")
-            return
+        -- 큐브 사용 여부에 따라 판매가를 서버가 권위 결정(클라 입력 불신):
+        --   사용함 → 계산된 예상 판매가(CurrentPrice).
+        --   미사용 → 기본 판매가(CurrentBasePrice)만 — 배수/보너스 없이. (데드락 탈출용 기본가 판매)
+        local gain
+        if self.HasPotential then
+            gain = self.CurrentPrice
+        else
+            gain = self.CurrentBasePrice
         end
-
-        local gain = self.CurrentPrice
         local soldId = self.CurrentItemId
         self.Meso = self.Meso + gain
         self:ClearItem()
         log("[GameManager] sold '" .. soldId .. "' (+" .. tostring(gain)
-            .. "), meso=" .. tostring(self.Meso))
+            .. "), potential=" .. tostring(self.HasPotential) .. ", meso=" .. tostring(self.Meso))
     end
 
     @ExecSpace("Server")
@@ -276,8 +290,30 @@ script GameManager extends Logic
         self.HasPotential = false
         self.CurrentGrade = ""
         self.CurrentResultType = ""
+        self.CurrentPotentialData = ""
         self.CurrentPrice = 0
         self.IsCurrentDestroyed = false
+    end
+
+    @ExecSpace("ServerOnly")
+    method string SerializePotential(any pr)
+        -- 잠재 결과(등급+옵션 3줄)를 @Sync 문자열로 직렬화한다(클라 스크래치 UI가 파싱해 표시).
+        --   포맷: "cubeCount;grade;line;line;line", line = "label|value|unit|optionType|isBonus|isDestroy|isValid".
+        --   맨 앞 cubeCount는 매 큐브 사용마다 값이 달라지게 해 클라가 동일 결과 재추첨도 변화로 감지하게 한다.
+        --   isValid는 주요 옵션의 장비 유효성(서버 판정). 비주요(잡옵/파괴)는 0.
+        local parts = { tostring(self.CubeUseCount), pr.grade }
+        for _, o in ipairs(pr.options) do
+            local isValid = 0
+            if o.optionType == "Main" and _BlacksmithConfig:IsValidMain(self.CurrentItemId, o.optionName) then
+                isValid = 1
+            end
+            local line = o.label .. "|" .. tostring(o.value) .. "|" .. o.unit .. "|" .. o.optionType
+                .. "|" .. (o.isBonusValue and "1" or "0")
+                .. "|" .. (o.isDestroy and "1" or "0")
+                .. "|" .. tostring(isValid)
+            table.insert(parts, line)
+        end
+        return table.concat(parts, ";")
     end
 
     @ExecSpace("Server")

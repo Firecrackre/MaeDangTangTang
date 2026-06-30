@@ -127,9 +127,9 @@ script PotentialService extends Logic
     end
 
     @ExecSpace("ServerOnly")
-    method any RollPotential()
-        -- 이상한 큐브 1회 판정(파괴 가능). 메커톤 기본 큐브. (potential §12)
-        return self:RollWith(true)
+    method any RollPotential(boolean allowDestroy)
+        -- 큐브 1회 판정. allowDestroy=true면 파괴 가능(이상한 큐브), false면 파괴 없음(장인의 큐브). (potential §12)
+        return self:RollWith(allowDestroy)
     end
 
     method string FormatOption(any o)

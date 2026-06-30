@@ -1,89 +1,218 @@
 @Component
 script ScratchTicketManager extends Component
-    -- ===== Tunable properties (adjustable for future upgrades) =====
-    property integer GridWidth = 40          -- foil pixel-grid width per ticket
-    property integer GridHeight = 8          -- foil pixel-grid height per ticket
-    property number BrushRadius = 2.0        -- erase circle radius in pixel units (the "transparent circle" around the cursor)
-    property number EraseStrength = 30       -- 0~100. Alpha removed per touch/hold event = EraseStrength/100
-    property number CompletionThreshold = 0.7 -- foil fraction that must reach alpha 0 to auto-complete a ticket
-    property string TargetMapName = "YoungMinMap" -- only show/interact while the local player is on this map
-    -- All of the above are FALLBACK defaults. If the data table below exists, its values override them at OnBeginPlay.
-    property string ConfigDataSetName = "ScratchTicketConfig" -- UserDataSet (data table) name that drives the config
+    -- 큐브 스크래치 UI (InGameMap). WeaponShop에서 무기 구매 → 큐브 선택/사용 → 은박 3줄 긁기 →
+    -- 옵션 공개(등급/유효 색·무지개) → 판매가 표시 → 판매/재사용. 모든 판정은 서버(GameManager) 권위,
+    -- 여기서는 표시/연출만 한다. (cube_scratch_system.md / potential_determination.md / concept.md)
 
-    -- ===== Bound entities (UUIDs injected by the UI builder) =====
+    -- ===== Tunable (scratch mechanic) =====
+    property integer GridWidth = 40           -- foil pixel-grid width per line
+    property integer GridHeight = 8           -- foil pixel-grid height per line
+    property number BrushRadius = 2.0         -- erase circle radius (pixel units)
+    property number EraseStrength = 30        -- 0~100. alpha removed per touch = EraseStrength/100
+    property number CompletionThreshold = 0.7 -- foil fraction cleared to auto-complete a line
+    property string TargetMapName = "InGameMap" -- gate the popup to this map
+    property string ConfigDataSetName = "ScratchTicketConfig" -- grid/brush tuning data table
+
+    -- ===== Bound entities (UUIDs: existing preserved / new injected by UI builder) =====
     property Entity board = "7efccaf4-7947-4708-bb07-6a1aba564e1f"
     property Entity foil1 = "137cf37d-4610-46f1-bbcb-70a9b9fca425"
     property Entity foil2 = "a753c45e-fd5c-4840-a680-dab6c1e7edfd"
     property Entity foil3 = "f2274449-74b4-40be-a4e2-64fed4e6e72e"
-    property Entity crumbLayer = "1da37c45-f05c-46c7-9ffa-0d9463c4e880" -- full-screen pool container for falling silver crumbs (UUID injected by UI builder)
+    property Entity crumbLayer = "1da37c45-f05c-46c7-9ffa-0d9463c4e880"
 
-    -- ===== Silver crumb particle tuning =====
-    property number CrumbSpawnChance = 0.4   -- 0~1 probability of emitting a crumb per scratch event ("a little at a time")
-    property number CrumbGravity = 1600      -- downward acceleration in UI pixels/s^2
-    property number CrumbFloorY = -540       -- screen-bottom Y (canvas center origin); crumb vanishes on reaching it
-    property number CrumbSize = 10           -- crumb square size in UI pixels (applied to every pooled crumb at OnBeginPlay; 0 = keep .ui authored size)
+    -- option line rows (show/hide) + reveal background (Prize) + option text (Label)
+    property Entity ticket1 = "11fe1100-5975-4526-b3a6-9d5626f22dcf"
+    property Entity ticket2 = "056716d0-067b-43e9-8423-449b65c19c20"
+    property Entity ticket3 = "8d8db640-2bac-4e53-bcd6-95b8dadb1bc1"
+    property SpriteGUIRendererComponent prize1 = "84efc92a-c8de-45ff-8bf3-245df42cd57f"
+    property SpriteGUIRendererComponent prize2 = "7140993a-ccaa-4e26-9992-c1f5cdc7a211"
+    property SpriteGUIRendererComponent prize3 = "1844ca64-6848-404f-a50e-0611449afdef"
+    property TextComponent label1 = "983951a4-8e31-4fb7-9d7a-08f74dac26fc"
+    property TextComponent label2 = "2a9c1ccf-6aee-4898-b442-01e3c3d82317"
+    property TextComponent label3 = "d898eb75-1c65-48c9-8ab4-912b0ce643b7"
+
+    -- center cube icon + bottom buttons
+    property Entity centerCube = "fb64e4b9-cff2-4105-ba21-2e8ca5d6b86d"
+    property Entity reuseButton = "aabf3d1a-7f60-45b3-820f-93746fb52b1e"
+    property Entity sellButton = "c4912f88-2d35-4e7e-a1e2-b017fc3aa5e9"
+
+    -- left clock (reused radial timer)
+    property Entity timerRoot = "050befc0-9375-4ce5-9b62-9413440aff01"
+    property SpriteGUIRendererComponent timerFill = "9a11f3ee-44ac-46f3-87ad-b0d6bb64a471"
+    property TextComponent timerLabel = "deb12f5e-e9ea-45d1-93a7-c19bc2117245"
+
+    -- left cube selection
+    property Entity cubeSelect = "e6cf1fe6-1ae7-4210-a570-d184ab37c929"
+    property Entity cubeIconWeird = "bf940d39-30d2-461e-950d-628d6f09e300"
+    property Entity cubeIconMaster = "d470d6e5-7882-4114-9835-d870e86ee22e"
+    property Entity weirdBuyButton = "a7b556a9-bf0b-48e2-b0a3-35acd579dbe1"
+    property Entity masterBuyButton = "f15c2ada-ee42-4391-b49e-2d0bb3bbdb6b"
+    property TextComponent weirdBuyText = "a7b556a9-bf0b-48e2-b0a3-35acd579dbe1"
+    property TextComponent masterBuyText = "f15c2ada-ee42-4391-b49e-2d0bb3bbdb6b"
+
+    -- right meso HUD + price window
+    property Entity hud = "c80805f7-3063-4cfa-b228-7b0a752b8b87"
+    property TextComponent mesoText = "da1d3963-784a-4c47-8180-9d57a83a8b65"
+    property TextComponent repayText = "e8469e05-01f1-4e1f-85e2-22765ae72d7a"
+    property Entity priceWindow = "626f0e14-b1d2-455c-96b4-9f60e373e960"
+    property TextComponent priceText = "18c964d8-d113-4dc4-84a4-308589167166"
+
+    -- 큐브 미사용 판매 확인 팝업 (UUID는 UIBuilder가 주입)
+    property Entity confirmSellGroup = "4b0df76c-0733-4acc-9ebf-475ef86dd4d8"
+    property TextComponent confirmMsgText = "8ecefcb6-39bc-4c16-9969-f40543a69141"
+    property Entity confirmYesButton = "dcf518b3-d4fb-4727-8428-e63abaa3ccb5"
+    property Entity confirmNoButton = "034fc2ae-2db4-48de-a6af-55eba6db0eec"
+
+    -- ===== Silver crumb tuning =====
+    property number CrumbSpawnChance = 0.4
+    property number CrumbGravity = 1600
+    property number CrumbFloorY = -540
+    property number CrumbSize = 10
 
     -- ===== Runtime state =====
     property any tickets = nil
     property any touchHandler = nil
     property any holdHandler = nil
     property boolean isActive = false
-    property any crumbs = nil                -- pooled crumb records {entity, ui, vx, vy, active}
-    property integer crumbCursor = 0         -- round-robin cursor into the crumb pool
+    property any crumbs = nil
+    property integer crumbCursor = 0
+
+    property integer maxCubes = 5
+    property string lastPotentialData = ""
+    property string lastHudKey = ""
+    property string lastClockKey = ""
+    property string lastCubeType = "weird"
+
+    property any optionLines = nil       -- parsed 3-line data {label,value,unit,optionType,isBonus,isDestroy,isValid,revealed}
+    property integer revealedCount = 0
+    property any rainbowLines = nil      -- indices of revealed valid lines (rainbow + wave)
+    property number rainbowTime = 0
+
+    property boolean hoverWeird = false
+    property boolean hoverMaster = false
+    property number hoverTime = 0
+
+    property boolean destroyPending = false
+    property number destroyTimer = 0
+    property number boardBaseX = 0
+
+    property any clickRecords = nil      -- {entity, eventHandler} list for cube/buy/reuse/sell buttons
+    property any enterRecords = nil      -- hover enter/exit handler records
 
     @ExecSpace("ClientOnly")
     method void OnBeginPlay()
-        -- Loads config from the data table (or falls back to defaults), then builds foils + wires input.
+        -- 큐브 스크래치 UI 초기화: 설정 로드 → foil/크럼 구성 → 입력/버튼/호버 연결 → 대기 상태로 숨김.
         self:LoadConfig()
         self.tickets = {}
         self:RegisterTicket(1, self.foil1)
         self:RegisterTicket(2, self.foil2)
         self:RegisterTicket(3, self.foil3)
-
         self:BuildCrumbPool()
 
+        self.clickRecords = {}
+        self.enterRecords = {}
+        self.maxCubes = _BlacksmithConfig:GetData().debtCycle
+        self.optionLines = {}
+        self.rainbowLines = {}
+
+        -- 스크린 터치(긁기)
         self.touchHandler = _InputService:ConnectEvent(ScreenTouchEvent, self.OnTouchBegin)
         self.holdHandler = _InputService:ConnectEvent(ScreenTouchHoldEvent, self.OnTouchHold)
 
-        -- Start hidden so the gate's initial state is consistent (isActive=false <-> board hidden).
-        -- Foils were ResetWithColor'd above while board was still enabled, so their pixel buffers persist.
-        -- OnUpdate re-enables the board only on the target map.
-        self.isActive = false
-        if isvalid(self.board) then
-            self.board.Enable = false
+        -- 큐브 선택(아이콘/구매버튼) → 사용. 재사용/판매 버튼.
+        self:WireClick(self.cubeIconWeird, self.OnUseWeird)
+        self:WireClick(self.weirdBuyButton, self.OnUseWeird)
+        self:WireClick(self.cubeIconMaster, self.OnUseMaster)
+        self:WireClick(self.masterBuyButton, self.OnUseMaster)
+        self:WireClick(self.reuseButton, self.OnReuseClicked)
+        self:WireClick(self.sellButton, self.OnSellClicked)
+        self:WireClick(self.confirmYesButton, self.OnConfirmSellYes)
+        self:WireClick(self.confirmNoButton, self.OnConfirmSellNo)
+
+        -- 큐브 아이콘 호버(부들부들) 연결
+        self:WireHover(self.cubeIconWeird, self.OnWeirdEnter, self.OnWeirdExit)
+        self:WireHover(self.cubeIconMaster, self.OnMasterEnter, self.OnMasterExit)
+
+        -- 큐브 아이콘/구매 버튼 표시값(아이콘 RUID + 가격 라벨)
+        self:InitCubeButtons()
+
+        if isvalid(self.board) and isvalid(self.board.UITransformComponent) then
+            self.boardBaseX = self.board.UITransformComponent.anchoredPosition.x
         end
-        log("[ScratchTicket] OnBeginPlay tickets=" .. #self.tickets .. " grid=" .. self.GridWidth .. "x" .. self.GridHeight)
+
+        -- 시작은 숨김(맵 게이팅 gotcha 회피: 명시적으로 끈다).
+        self.isActive = false
+        self.lastPotentialData = "\0"
+        self:HideConfirmSell()
+        self:SetContainersActive(false)
+        self:ResetToWaiting()
+        log("[ScratchTicket] OnBeginPlay map=" .. self.TargetMapName .. " grid=" .. self.GridWidth .. "x" .. self.GridHeight)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void WireClick(Entity e, any callback)
+        -- 버튼 엔티티의 클릭 이벤트 연결(Entity에서 ConnectEvent). 핸들러는 해제용으로 보관.
+        if not isvalid(e) then return end
+        local h = e:ConnectEvent(ButtonClickEvent, callback)
+        table.insert(self.clickRecords, { entity = e, eventHandler = h })
+    end
+
+    @ExecSpace("ClientOnly")
+    method void WireHover(Entity e, any onEnter, any onExit)
+        -- UI 포인터 진입/이탈 이벤트 연결(PC 호버). 핸들러는 해제용으로 보관.
+        if not isvalid(e) then return end
+        local he = e:ConnectEvent(UITouchEnterEvent, onEnter)
+        local hx = e:ConnectEvent(UITouchExitEvent, onExit)
+        table.insert(self.enterRecords, { entity = e, enterH = he, exitH = hx })
+    end
+
+    @ExecSpace("ClientOnly")
+    method void InitCubeButtons()
+        -- 큐브 아이콘 이미지(plain RUID) + 구매 버튼 가격 라벨을 config에서 채운다.
+        local weird = _BlacksmithConfig:GetCube("weird")
+        local master = _BlacksmithConfig:GetCube("master")
+        if weird ~= nil then
+            self:SetIcon(self.cubeIconWeird, weird.icon, Color(1, 1, 1, 1))  -- 실제 큐브 아트 본색
+            if isvalid(self.weirdBuyText) then
+                self.weirdBuyText.Text = weird.label .. "\n" .. self:Comma(weird.cost) .. " 메소"
+            end
+        end
+        if master ~= nil then
+            self:SetIcon(self.cubeIconMaster, master.icon, Color(1, 1, 1, 1))  -- 실제 큐브 아트 본색
+            if isvalid(self.masterBuyText) then
+                self.masterBuyText.Text = master.label .. "\n" .. self:Comma(master.cost) .. " 메소"
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SetIcon(Entity e, string ruid, any tint)
+        -- 엔티티의 SpriteGUIRendererComponent.ImageRUID 설정(plain 스프라이트 RUID) + 틴트(흰색=본색).
+        if not isvalid(e) then return end
+        local spr = e.SpriteGUIRendererComponent
+        if isvalid(spr) then
+            spr.ImageRUID = ruid
+            if tint ~= nil then spr.Color = tint end
+        end
     end
 
     @ExecSpace("ClientOnly")
     method void LoadConfig()
-        -- Reads grid/brush/strength/threshold/target-map from the ScratchTicketConfig data table.
-        -- Single source of truth: edit the CSV to retune without code changes. Absent table/row -> inspector defaults.
+        -- grid/brush/strength/threshold만 데이터테이블에서 읽는다(맵 이름은 InGameMap 고정 — CSV 무시).
         local ds = _DataService:GetTable(self.ConfigDataSetName)
-        if ds == nil then
-            log("[ScratchTicket] config table '" .. self.ConfigDataSetName .. "' not found, using defaults grid=" .. self.GridWidth .. "x" .. self.GridHeight)
-            return
-        end
+        if ds == nil then return end
         local row = ds:FindRow("key", "default")
-        if row == nil then
-            log("[ScratchTicket] config row 'default' not found, using defaults")
-            return
-        end
+        if row == nil then return end
         self.GridWidth = math.floor(self:ConfigNumber(row, "GridWidth", self.GridWidth))
         self.GridHeight = math.floor(self:ConfigNumber(row, "GridHeight", self.GridHeight))
         self.BrushRadius = self:ConfigNumber(row, "BrushRadius", self.BrushRadius)
         self.EraseStrength = self:ConfigNumber(row, "EraseStrength", self.EraseStrength)
         self.CompletionThreshold = self:ConfigNumber(row, "CompletionThreshold", self.CompletionThreshold)
-        local mapName = row:GetItem("TargetMapName")
-        if mapName ~= nil and mapName ~= "" then
-            self.TargetMapName = mapName
-        end
-        log("[ScratchTicket] config loaded grid=" .. self.GridWidth .. "x" .. self.GridHeight .. " brush=" .. self.BrushRadius .. " strength=" .. self.EraseStrength .. " map=" .. self.TargetMapName)
     end
 
     @ExecSpace("ClientOnly")
     method number ConfigNumber(any row, string columnName, number fallback)
-        -- Parses a string cell to number; empty/nil/invalid -> fallback.
+        -- 문자열 셀 → 숫자. 비었거나 파싱 실패면 fallback.
         local cell = row:GetItem(columnName)
         if cell == nil or cell == "" then return fallback end
         local n = tonumber(cell)
@@ -92,23 +221,9 @@ script ScratchTicketManager extends Component
     end
 
     @ExecSpace("ClientOnly")
-    method void ReloadConfig()
-        -- Re-reads the data table and re-initializes all foils. Live-retune entry point for in-game logic.
-        self:LoadConfig()
-        self.tickets = {}
-        self:RegisterTicket(1, self.foil1)
-        self:RegisterTicket(2, self.foil2)
-        self:RegisterTicket(3, self.foil3)
-        log("[ScratchTicket] config reloaded and foils reset")
-    end
-
-    @ExecSpace("ClientOnly")
     method void RegisterTicket(integer index, Entity foilEntity)
-        -- Initializes one ticket's foil pixel grid (filled silver, alpha 1) and records its state.
-        if not isvalid(foilEntity) then
-            log("[ScratchTicket] RegisterTicket " .. index .. " invalid foil entity")
-            return
-        end
+        -- 한 줄의 은박 픽셀 그리드를 은색·알파1로 초기화하고 상태를 기록한다.
+        if not isvalid(foilEntity) then return end
         local pixel = foilEntity.PixelGUIRendererComponent
         local ui = foilEntity.UITransformComponent
         local W = self.GridWidth
@@ -119,91 +234,175 @@ script ScratchTicketManager extends Component
             alpha[i] = 1.0
         end
         self.tickets[index] = {
-            index = index,
-            pixel = pixel,
-            ui = ui,
-            alpha = alpha,
-            cleared = 0,
-            total = W * H,
-            completed = false,
+            index = index, pixel = pixel, ui = ui, alpha = alpha,
+            cleared = 0, total = W * H, completed = false,
         }
     end
 
     @ExecSpace("ClientOnly")
     method void BuildCrumbPool()
-        -- Collects the pre-authored crumb sprites under CrumbLayer into a reusable pool (all start disabled).
+        -- CrumbLayer 아래 미리 만든 은박 조각 스프라이트들을 풀로 수집(전부 비활성 시작).
         self.crumbs = {}
         self.crumbCursor = 0
-        if not isvalid(self.crumbLayer) then
-            log("[ScratchTicket] crumbLayer invalid, crumb particles disabled")
-            return
-        end
+        if not isvalid(self.crumbLayer) then return end
         for _, c in ipairs(self.crumbLayer.Children:ToTable()) do
             c.Enable = false
             if self.CrumbSize > 0 then
                 c.UITransformComponent.RectSize = Vector2(self.CrumbSize, self.CrumbSize)
             end
-            table.insert(self.crumbs, {
-                entity = c,
-                ui = c.UITransformComponent,
-                vx = 0,
-                vy = 0,
-                active = false,
-            })
+            table.insert(self.crumbs, { entity = c, ui = c.UITransformComponent, vx = 0, vy = 0, active = false })
         end
-        log("[ScratchTicket] crumb pool size=" .. #self.crumbs)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnUpdate(number delta)
+        -- 게이팅 + 상태 폴링 + 연출 갱신.
+        local lp = _UserService.LocalPlayer
+        local onMap = isvalid(lp) and lp.CurrentMapName == self.TargetMapName
+        -- 아이템 보유 중일 때만 스크래치 UI 활성(없으면 상점이 보임).
+        local active = onMap and (_GameManager.CurrentItemId ~= "")
+        if active ~= self.isActive then
+            self.isActive = active
+            self:SetContainersActive(active)
+            if active then
+                -- 활성 진입 시 현재 서버 상태 기준으로 재평가(다음 폴링이 처리하도록 sentinel).
+                self.lastPotentialData = "\0"
+                self.destroyPending = false
+            end
+        end
+        if not active then return end
+
+        -- 잠재 데이터 변화 감지 → 대기/스크래치 세팅 전환.
+        local pdata = _GameManager.CurrentPotentialData
+        if pdata ~= self.lastPotentialData then
+            self.lastPotentialData = pdata
+            if pdata == "" then
+                self:ResetToWaiting()
+            else
+                self:SetupScratch(pdata)
+            end
+        end
+
+        self:UpdateClock()
+        self:UpdateHud()
+        self:UpdateHoverFX(delta)
+        self:UpdateRainbow(delta)
+        self:UpdateDestroy(delta)
+        self:UpdateCrumbs(delta)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SetContainersActive(boolean on)
+        -- 루트 직속 컨테이너들을 한꺼번에 토글(board/시계/큐브선택/HUD). 판매가창은 별도(공개 완료 시만).
+        if isvalid(self.board) then self.board.Enable = on end
+        if isvalid(self.timerRoot) then self.timerRoot.Enable = on end
+        if isvalid(self.cubeSelect) then self.cubeSelect.Enable = on end
+        if isvalid(self.hud) then self.hud.Enable = on end
+        if not on and isvalid(self.priceWindow) then self.priceWindow.Enable = false end
+        if not on then self:HideConfirmSell() end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ResetToWaiting()
+        -- 큐브 사용 전 대기 상태: 중앙 큐브/옵션 3줄/판매가 숨김, 재사용·판매 비활성, 큐브 선택만 노출.
+        if isvalid(self.centerCube) then self.centerCube.Enable = false end
+        if isvalid(self.ticket1) then self.ticket1.Enable = false end
+        if isvalid(self.ticket2) then self.ticket2.Enable = false end
+        if isvalid(self.ticket3) then self.ticket3.Enable = false end
+        if isvalid(self.priceWindow) then self.priceWindow.Enable = false end
+        self:SetButtonEnabled(self.reuseButton, false)
+        -- 큐브 미사용 대기 상태에서도 판매 가능(기본가 판매 → 데드락 탈출). 클릭 시 확인 팝업.
+        self:SetButtonEnabled(self.sellButton, true)
+        self.revealedCount = 0
+        self.rainbowLines = {}
+        self.destroyPending = false
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SetupScratch(string pdata)
+        -- 큐브 사용 결과를 받아 옵션 3줄을 은박으로 덮어 표시(긁기 시작 가능 상태). 잠재 데이터 파싱.
+        -- pdata = "cubeCount;grade;line;line;line", line = "label|value|unit|optionType|isBonus|isDestroy|isValid"
+        local fields = self:Split(pdata, ";")
+        if #fields < 5 then return end
+        -- fields[1]=cubeCount, fields[2]=grade, fields[3..5]=lines
+        self.optionLines = {}
+        for i = 1, 3 do
+            local parts = self:Split(fields[2 + i], "|")
+            self.optionLines[i] = {
+                label = parts[1] or "",
+                value = tonumber(parts[2]) or 0,
+                unit = parts[3] or "",
+                optionType = parts[4] or "Junk",
+                isBonus = (parts[5] == "1"),
+                isDestroy = (parts[6] == "1"),
+                isValid = (parts[7] == "1"),
+            }
+        end
+
+        -- 중앙 큐브 아이콘 표시(마지막 선택 큐브). 실제 큐브 아트 본색.
+        local cube = _BlacksmithConfig:GetCube(self.lastCubeType)
+        if cube ~= nil then
+            self:SetIcon(self.centerCube, cube.icon, Color(1, 1, 1, 1))
+        end
+        if isvalid(self.centerCube) then self.centerCube.Enable = true end
+
+        local prizes = { self.prize1, self.prize2, self.prize3 }
+        local labels = { self.label1, self.label2, self.label3 }
+        local foils = { self.foil1, self.foil2, self.foil3 }
+        local rows = { self.ticket1, self.ticket2, self.ticket3 }
+        for i = 1, 3 do
+            local o = self.optionLines[i]
+            if isvalid(rows[i]) then rows[i].Enable = true end
+            -- 옵션 텍스트(은박 아래). 초기 글자색 흰색, 위치 0.
+            if isvalid(labels[i]) then
+                labels[i].Text = self:FormatOption(o)
+                labels[i].FontColor = Color(1, 1, 1, 1)
+                if isvalid(labels[i].Entity) and isvalid(labels[i].Entity.UITransformComponent) then
+                    labels[i].Entity.UITransformComponent.anchoredPosition = Vector2(0, 0)
+                end
+            end
+            -- 바탕색: 처음엔 회색(공개 전). 공개 시 종류색으로 전환.
+            if isvalid(prizes[i]) then
+                prizes[i].Color = Color(0.5, 0.5, 0.52, 1.0)
+            end
+            -- 은박 다시 덮기.
+            self:RegisterTicket(i, foils[i])
+        end
+
+        self.revealedCount = 0
+        self.rainbowLines = {}
+        self.destroyPending = false
+        if isvalid(self.priceWindow) then self.priceWindow.Enable = false end
+        self:SetButtonEnabled(self.reuseButton, false)
+        self:SetButtonEnabled(self.sellButton, false)
+        log("[ScratchTicket] setup scratch: grade=" .. (fields[2] or "?") .. " cube=" .. self.lastCubeType)
     end
 
     @ExecSpace("ClientOnly")
     method void SpawnCrumb(Vector2 touchPoint)
-        -- Emits one silver crumb at the scratch point (probability-gated so debris falls "a little at a time").
+        -- 긁는 지점에 은박 조각 1개를 확률적으로 방출.
         if self.crumbs == nil or #self.crumbs == 0 then return end
         if not isvalid(self.crumbLayer) then return end
         if _UtilLogic:RandomDouble() > self.CrumbSpawnChance then return end
-
-        -- Find a free crumb starting at the round-robin cursor (one pass; bail if all are in flight).
         local n = #self.crumbs
         local rec = nil
         for step = 1, n do
             self.crumbCursor = (self.crumbCursor % n) + 1
             local candidate = self.crumbs[self.crumbCursor]
-            if not candidate.active then
-                rec = candidate
-                break
-            end
+            if not candidate.active then rec = candidate break end
         end
         if rec == nil then return end
-
         local p = _UILogic:ScreenToLocalUIPosition(touchPoint, self.crumbLayer.UITransformComponent)
         rec.ui.anchoredPosition = p
-        rec.vx = -70 + _UtilLogic:RandomDouble() * 140   -- sideways scatter
-        rec.vy = -40 + _UtilLogic:RandomDouble() * 60    -- slight initial pop up/down before gravity takes over
+        rec.vx = -70 + _UtilLogic:RandomDouble() * 140
+        rec.vy = -40 + _UtilLogic:RandomDouble() * 60
         rec.active = true
         rec.entity.Enable = true
     end
 
     @ExecSpace("ClientOnly")
-    method void OnUpdate(number delta)
-        -- Gates visibility + interaction to the target map (shows the board only while the local player is on it).
-        local lp = _UserService.LocalPlayer
-        local onMap = false
-        if isvalid(lp) and lp.CurrentMapName == self.TargetMapName then
-            onMap = true
-        end
-        if onMap ~= self.isActive then
-            self.isActive = onMap
-            if isvalid(self.board) then
-                self.board.Enable = onMap
-            end
-            log("[ScratchTicket] active=" .. tostring(onMap) .. " map=" .. tostring(isvalid(lp) and lp.CurrentMapName or "nil"))
-        end
-
-        self:UpdateCrumbs(delta)
-    end
-
-    @ExecSpace("ClientOnly")
     method void UpdateCrumbs(number delta)
-        -- Advances active crumbs under gravity; a crumb vanishes the instant it reaches the screen-bottom floor.
+        -- 활성 조각을 중력으로 낙하시키고 바닥 도달 시 회수.
         if self.crumbs == nil then return end
         for i = 1, #self.crumbs do
             local rec = self.crumbs[i]
@@ -224,24 +423,23 @@ script ScratchTicketManager extends Component
 
     @ExecSpace("ClientOnly")
     method void OnTouchBegin(ScreenTouchEvent event)
-        -- Click start: scratch at the touch point.
+        -- 클릭 시작: 터치 지점에서 긁기.
         self:Scratch(event.TouchPoint, event.TouchId)
     end
 
     @ExecSpace("ClientOnly")
     method void OnTouchHold(ScreenTouchHoldEvent event)
-        -- Drag/hold: fires continuously while pressed, keeps scratching along the path.
+        -- 드래그/홀드: 누르는 동안 연속 긁기.
         self:Scratch(event.TouchPoint, event.TouchId)
     end
 
     @ExecSpace("ClientOnly")
     method void Scratch(Vector2 touchPoint, integer touchId)
-        -- Hit-tests the touch against each foil rect (world coords) and erases inside the brush radius.
+        -- 터치를 각 줄 사각형(게임 월드 좌표)에 히트테스트해 브러시 반경 내 알파를 깎는다.
         if not self.isActive then return end
         if touchId < 1 then return end
         if self.tickets == nil then return end
-
-        -- Touch in game-world coords; foil rect corners via LocalUIToWorldPosition (same world space).
+        if self.revealedCount >= 3 then return end  -- 모두 공개되면 긁기 불필요
         local worldPt = _UILogic:ScreenToWorldPosition(touchPoint)
         for i = 1, #self.tickets do
             local t = self.tickets[i]
@@ -267,7 +465,7 @@ script ScratchTicketManager extends Component
 
     @ExecSpace("ClientOnly")
     method void ApplyBrush(any t, number u, number v)
-        -- Reduces alpha of every foil pixel inside the circular brush by EraseStrength/100 (gradual rub-off).
+        -- 브러시 원 내 모든 픽셀 알파를 EraseStrength/100 만큼 감소(점진적 벗겨짐).
         local W = self.GridWidth
         local H = self.GridHeight
         local cx = math.floor(u * W) + 1
@@ -276,12 +474,10 @@ script ScratchTicketManager extends Component
         local r2 = R * R
         local dec = self.EraseStrength / 100.0
         if dec <= 0 then return end
-
         local fromX = math.max(1, math.floor(cx - R))
         local toX = math.min(W, math.ceil(cx + R))
         local fromY = math.max(1, math.floor(cy - R))
         local toY = math.min(H, math.ceil(cy + R))
-
         for py = fromY, toY do
             for px = fromX, toX do
                 local ddx = px - cx
@@ -294,14 +490,11 @@ script ScratchTicketManager extends Component
                         if a < 0 then a = 0 end
                         t.alpha[idx] = a
                         t.pixel:SetPixel(px, py, Color(0.78, 0.78, 0.82, a))
-                        if a <= 0 then
-                            t.cleared = t.cleared + 1
-                        end
+                        if a <= 0 then t.cleared = t.cleared + 1 end
                     end
                 end
             end
         end
-
         if (not t.completed) and (t.cleared / t.total) >= self.CompletionThreshold then
             self:CompleteTicket(t)
         end
@@ -309,62 +502,343 @@ script ScratchTicketManager extends Component
 
     @ExecSpace("ClientOnly")
     method void CompleteTicket(any t)
-        -- Clears all remaining foil and notifies the game-logic extension point.
+        -- 남은 은박을 완전 투명으로 지우고 줄 공개 처리.
         t.completed = true
         t.pixel:FillColor(Color(0, 0, 0, 0))
-        log("[ScratchTicket] ticket " .. t.index .. " completed")
-        self:OnTicketCompleted(t.index)
+        self:OnLineRevealed(t.index)
     end
 
     @ExecSpace("ClientOnly")
-    method void OnTicketCompleted(integer index)
-        -- EXTENSION POINT: hook game logic here later (reward / probability handled elsewhere).
-        log("[ScratchTicket] OnTicketCompleted index=" .. index)
-        local allDone = true
-        for i = 1, #self.tickets do
-            if not self.tickets[i].completed then
-                allDone = false
+    method void OnLineRevealed(integer index)
+        -- 한 줄 공개: 종류별 바탕색 전환 + 유효옵션이면 무지개/출렁 등록. 3줄 완료 시 최종 처리.
+        local o = nil
+        if self.optionLines ~= nil then o = self.optionLines[index] end
+        local prizes = { self.prize1, self.prize2, self.prize3 }
+        local pr = prizes[index]
+        if o ~= nil and isvalid(pr) then
+            if o.isDestroy then
+                pr.Color = Color(0.55, 0.12, 0.12, 1.0)        -- 파괴 = 빨강
+            elseif o.isValid and o.isBonus then
+                pr.Color = Color(0.62, 0.34, 0.92, 1.0)         -- 이탈 = 보라
+            elseif o.isValid then
+                pr.Color = Color(0.95, 0.82, 0.25, 1.0)         -- 유효 = 노랑
+            else
+                pr.Color = Color(0.42, 0.44, 0.48, 1.0)         -- 잡옵/비유효 = 회색
+            end
+            if o.isValid then
+                table.insert(self.rainbowLines, index)          -- 무지개 글씨 대상
             end
         end
-        if allDone then
-            log("[ScratchTicket] ALL tickets completed")
+        self.revealedCount = self.revealedCount + 1
+        log("[ScratchTicket] line " .. index .. " revealed (" .. self.revealedCount .. "/3)")
+        if self.revealedCount >= 3 then
+            self:OnAllRevealed()
         end
     end
 
     @ExecSpace("ClientOnly")
-    method void SetEraseStrength(number strength)
-        -- Runtime override of the data-table EraseStrength (0~100). Data table is the persistent source; this is a live tweak.
-        local s = strength
-        if s < 0 then s = 0 end
-        if s > 100 then s = 100 end
-        self.EraseStrength = s
-        log("[ScratchTicket] EraseStrength set to " .. s)
+    method void OnAllRevealed()
+        -- 3줄 공개 완료: 파괴면 짧은 연출 후 자동 복귀, 아니면 판매가 표시 + 판매/재사용 활성.
+        if _GameManager.IsCurrentDestroyed then
+            self.destroyPending = true
+            self.destroyTimer = 0
+            log("[ScratchTicket] all revealed -> DESTROYED, auto-confirm pending")
+            return
+        end
+        if isvalid(self.priceWindow) then self.priceWindow.Enable = true end
+        if isvalid(self.priceText) then
+            self.priceText.Text = self:Comma(_GameManager.CurrentPrice) .. " 메소"
+        end
+        self:SetButtonEnabled(self.reuseButton, true)
+        self:SetButtonEnabled(self.sellButton, true)
+        log("[ScratchTicket] all revealed -> price=" .. tostring(_GameManager.CurrentPrice))
     end
 
     @ExecSpace("ClientOnly")
-    method void SetBrushRadius(number radius)
-        -- Runtime override of the data-table BrushRadius (cell units). Data table is the persistent source; this is a live tweak.
-        if radius < 0 then radius = 0 end
-        self.BrushRadius = radius
-        log("[ScratchTicket] BrushRadius set to " .. radius)
+    method void UpdateDestroy(number delta)
+        -- 파괴 연출: board를 좌우로 흔들고 ~1.2초 후 서버에 파괴 확인 → 아이템 정리(상점 복귀).
+        if not self.destroyPending then return end
+        self.destroyTimer = self.destroyTimer + delta
+        if isvalid(self.board) and isvalid(self.board.UITransformComponent) then
+            local jx = (_UtilLogic:RandomDouble() - 0.5) * 24
+            local p = self.board.UITransformComponent.anchoredPosition
+            self.board.UITransformComponent.anchoredPosition = Vector2(self.boardBaseX + jx, p.y)
+        end
+        if self.destroyTimer >= 1.2 then
+            self.destroyPending = false
+            if isvalid(self.board) and isvalid(self.board.UITransformComponent) then
+                local p = self.board.UITransformComponent.anchoredPosition
+                self.board.UITransformComponent.anchoredPosition = Vector2(self.boardBaseX, p.y)
+            end
+            _GameManager:RequestConfirmDestroy()
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateClock()
+        -- 좌상단 시계: 큐브 사용 횟수 기준 라디얼 채움 + 라벨(서버 @Sync 구동).
+        local used = _GameManager.CubeUseCount % self.maxCubes
+        if _GameManager.IsRepaymentDue then used = self.maxCubes end
+        local key = tostring(used)
+        if key == self.lastClockKey then return end
+        self.lastClockKey = key
+        if isvalid(self.timerFill) then
+            self.timerFill.FillAmount = used / self.maxCubes
+        end
+        if isvalid(self.timerLabel) then
+            self.timerLabel.Text = tostring(used) .. "/" .. tostring(self.maxCubes)
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateHud()
+        -- 우상단 메소/상환 HUD. 부족 시 메소 빨강.
+        local meso = _GameManager.Meso
+        local required = _GameManager.PendingRepayment
+        if required <= 0 then
+            required = _BlacksmithConfig:GetDebtAmount(_GameManager.DebtStage + 1)
+        end
+        local key = tostring(meso) .. "|" .. tostring(required)
+        if key == self.lastHudKey then return end
+        self.lastHudKey = key
+        if isvalid(self.mesoText) then
+            self.mesoText.Text = "현재 소유 메소: " .. self:Comma(meso)
+            if meso >= required then
+                self.mesoText.FontColor = Color(0.3, 0.85, 0.3, 1)
+            else
+                self.mesoText.FontColor = Color(1, 0.3, 0.3, 1)
+            end
+        end
+        if isvalid(self.repayText) then
+            self.repayText.Text = "상환 필요 메소: " .. self:Comma(required)
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateHoverFX(number delta)
+        -- 큐브 아이콘 호버 시 살짝 확대 + Z회전 진동(부들부들). 해제 시 원복.
+        self.hoverTime = self.hoverTime + delta
+        local wob = math.sin(self.hoverTime * 40) * 4   -- degrees
+        self:ApplyHover(self.cubeIconWeird, self.hoverWeird, wob)
+        self:ApplyHover(self.cubeIconMaster, self.hoverMaster, wob)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ApplyHover(Entity e, boolean hovered, number wob)
+        -- 단일 큐브 아이콘에 호버 연출 적용/해제.
+        if not isvalid(e) or not isvalid(e.UITransformComponent) then return end
+        local ui = e.UITransformComponent
+        if hovered then
+            ui.UIScale = Vector3(1.15, 1.15, 1)
+            ui.UIRotation = Vector3(0, 0, wob)
+        else
+            ui.UIScale = Vector3(1, 1, 1)
+            ui.UIRotation = Vector3(0, 0, 0)
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateRainbow(number delta)
+        -- 공개된 유효옵션 줄의 글씨를 무지개색으로 순환 + Y로 출렁이게 한다.
+        if self.rainbowLines == nil or #self.rainbowLines == 0 then return end
+        self.rainbowTime = self.rainbowTime + delta
+        local labels = { self.label1, self.label2, self.label3 }
+        for _, idx in ipairs(self.rainbowLines) do
+            local lab = labels[idx]
+            if isvalid(lab) then
+                local hue = (self.rainbowTime * 0.5 + idx * 0.2) % 1.0
+                lab.FontColor = self:HsvColor(hue, 0.85, 1.0)
+                if isvalid(lab.Entity) and isvalid(lab.Entity.UITransformComponent) then
+                    local wy = math.sin(self.rainbowTime * 6 + idx) * 6
+                    lab.Entity.UITransformComponent.anchoredPosition = Vector2(0, wy)
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method any HsvColor(number h, number s, number v)
+        -- HSV(0~1) → Color. 무지개 글씨용.
+        local i = math.floor(h * 6)
+        local f = h * 6 - i
+        local p = v * (1 - s)
+        local q = v * (1 - f * s)
+        local t = v * (1 - (1 - f) * s)
+        local m = i % 6
+        local r, g, b = v, t, p
+        if m == 1 then r, g, b = q, v, p
+        elseif m == 2 then r, g, b = p, v, t
+        elseif m == 3 then r, g, b = p, q, v
+        elseif m == 4 then r, g, b = t, p, v
+        elseif m == 5 then r, g, b = v, p, q end
+        return Color(r, g, b, 1)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnUseWeird()
+        -- 이상한 큐브 사용 요청.
+        self:UseCube("weird")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnUseMaster()
+        -- 장인의 큐브 사용 요청.
+        self:UseCube("master")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnReuseClicked()
+        -- 한 번 더 사용하기: 마지막 사용한 큐브로 재추첨.
+        self:UseCube(self.lastCubeType)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UseCube(string cubeType)
+        -- 서버에 큐브 사용 요청(서버가 비용/파괴/판정 확정). 결과는 @Sync로 내려와 SetupScratch가 처리.
+        self.lastCubeType = cubeType
+        log("[ScratchTicket] request use cube: " .. cubeType)
+        _GameManager:RequestUseCube(cubeType)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnSellClicked()
+        -- 판매 클릭: 큐브를 한 번이라도 썼으면 바로 판매, 안 썼으면 확인 팝업(기본가 판매 경고).
+        if _GameManager.HasPotential then
+            log("[ScratchTicket] request sell (with potential)")
+            _GameManager:RequestSellItem()
+        else
+            self:ShowConfirmSell()
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ShowConfirmSell()
+        -- 큐브 미사용 판매 확인 팝업 표시 + 기본 판매가 안내 메시지.
+        if isvalid(self.confirmMsgText) then
+            self.confirmMsgText.Text = "큐브를 사용하지 않았습니다.\n기본 판매가 "
+                .. self:Comma(_GameManager.CurrentBasePrice) .. " 메소로 판매할까요?"
+        end
+        if isvalid(self.confirmSellGroup) then self.confirmSellGroup.Enable = true end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void HideConfirmSell()
+        -- 확인 팝업 숨김.
+        if isvalid(self.confirmSellGroup) then self.confirmSellGroup.Enable = false end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnConfirmSellYes()
+        -- 확인: 팝업 닫고 서버에 판매 요청(서버가 큐브 미사용 → 기본가로 처리). 이후 상점 복귀(가시성 자동).
+        self:HideConfirmSell()
+        log("[ScratchTicket] request sell (base price, no cube)")
+        _GameManager:RequestSellItem()
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnConfirmSellNo()
+        -- 취소: 팝업만 닫고 현재 상태 유지.
+        self:HideConfirmSell()
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SetButtonEnabled(Entity e, boolean enabled)
+        -- 버튼 활성/비활성(클릭 차단 + 알파 흐리게).
+        if not isvalid(e) then return end
+        local btn = e.ButtonComponent
+        if isvalid(btn) then btn.Enable = enabled end
+        local spr = e.SpriteGUIRendererComponent
+        if isvalid(spr) then
+            local c = spr.Color
+            spr.Color = Color(c.r, c.g, c.b, enabled and 1.0 or 0.35)
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnWeirdEnter(UITouchEnterEvent event)
+        -- 이상한 큐브 호버 시작.
+        self.hoverWeird = true
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnWeirdExit(UITouchExitEvent event)
+        -- 이상한 큐브 호버 종료.
+        self.hoverWeird = false
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnMasterEnter(UITouchEnterEvent event)
+        -- 장인의 큐브 호버 시작.
+        self.hoverMaster = true
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnMasterExit(UITouchExitEvent event)
+        -- 장인의 큐브 호버 종료.
+        self.hoverMaster = false
+    end
+
+    method string FormatOption(any o)
+        -- 옵션 한 줄 표시 문자열. (이탈 여부는 글자 대신 보라색·무지개 연출로만 표현)
+        if o.isDestroy then return "파괴" end
+        return o.label .. " +" .. tostring(o.value) .. o.unit
+    end
+
+    method any Split(string s, string sep)
+        -- 구분자로 문자열 분할(빈 토큰 보존). 직렬화 파싱용.
+        local out = {}
+        local start = 1
+        local sepLen = #sep
+        while true do
+            local i = string.find(s, sep, start, true)
+            if i == nil then
+                table.insert(out, string.sub(s, start))
+                break
+            end
+            table.insert(out, string.sub(s, start, i - 1))
+            start = i + sepLen
+        end
+        return out
+    end
+
+    method string Comma(integer n)
+        -- 천 단위 콤마.
+        local sg = ""
+        if n < 0 then sg = "-" n = -n end
+        local s = tostring(n)
+        local out = ""
+        local cnt = 0
+        for i = #s, 1, -1 do
+            out = string.sub(s, i, i) .. out
+            cnt = cnt + 1
+            if cnt % 3 == 0 and i > 1 then out = "," .. out end
+        end
+        return sg .. out
     end
 
     @ExecSpace("ClientOnly")
     method void OnEndPlay()
-        -- Releases input subscriptions (mandatory cleanup).
-        if self.touchHandler then
-            _InputService:DisconnectEvent(ScreenTouchEvent, self.touchHandler)
+        -- 입력/버튼/호버 구독 해제(필수).
+        if self.touchHandler then _InputService:DisconnectEvent(ScreenTouchEvent, self.touchHandler) end
+        if self.holdHandler then _InputService:DisconnectEvent(ScreenTouchHoldEvent, self.holdHandler) end
+        if self.clickRecords ~= nil then
+            for _, rec in ipairs(self.clickRecords) do
+                if isvalid(rec.entity) then rec.entity:DisconnectEvent(ButtonClickEvent, rec.eventHandler) end
+            end
         end
-        if self.holdHandler then
-            _InputService:DisconnectEvent(ScreenTouchHoldEvent, self.holdHandler)
+        if self.enterRecords ~= nil then
+            for _, rec in ipairs(self.enterRecords) do
+                if isvalid(rec.entity) then
+                    rec.entity:DisconnectEvent(UITouchEnterEvent, rec.enterH)
+                    rec.entity:DisconnectEvent(UITouchExitEvent, rec.exitH)
+                end
+            end
         end
         if self.crumbs ~= nil then
             for i = 1, #self.crumbs do
                 local rec = self.crumbs[i]
                 rec.active = false
-                if isvalid(rec.entity) then
-                    rec.entity.Enable = false
-                end
+                if isvalid(rec.entity) then rec.entity.Enable = false end
             end
         end
     end
