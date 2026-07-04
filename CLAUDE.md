@@ -14,9 +14,12 @@
 | 기획서 | 경로 | 다루는 내용 |
 |---|---|---|
 | 컨셉 | `docs/specs/concept.md` | 세계관, 핵심 재미 요소, 아트 방향성 |
+| 로비 허브 | `docs/specs/lobby_hub.md` | 큐브 스크래치·대장 기술·재정 관리 3갈래 진입 허브, 상태 확인·전략 선택, 기능 간 연결·구현 우선순위 |
 | 큐브 스크래치 시스템 | `docs/specs/cube_scratch_system.md` | 큐브 아이템 사용 메커니즘, 스크래치 UI/UX 및 조작 흐름 |
 | 잠재능력 판정 | `docs/specs/potential_determination.md` | 등급(레어~레전더리), 옵션 재설정 로직, 등급 상승·옵션 등장 확률 테이블 |
+| 대장 기술 업그레이드 | `docs/specs/blacksmith_upgrade.md` | 대장 기술 획득·선택·중복(단계 상승)·종류(더 좋은 물품/대장장이의 눈/가격 협상/위험 거래)·적용 우선순위 |
 | 판매가 산정 | `docs/specs/pricing_calculation.md` | 아이템·재화 가치 기준, 상점 판매/구매 가격 밸런싱 공식 |
+| 재정 관리 | `docs/specs/finance_management.md` | 메소 대출 서비스, 골드리치 은행 저축, 상환 압박 연동, 재정 표시 정보 |
 | 게임 흐름 | `docs/specs/game_flow_charts.md` | 로그인~인게임 루프, 콘텐츠 전환 등 전체 상태 머신(FSM)·시퀀스 |
 
 ## 작업 → 필독 기획서 매핑
@@ -24,9 +27,12 @@
 
 | 작업 키워드 | 필독 기획서 |
 |---|---|
+| 로비 / 허브 / 메인 화면 / 메뉴 선택 | `lobby_hub.md` |
 | 큐브 / 스크래치 / 큐브 UI / 큐브 아이템 | `cube_scratch_system.md` + `potential_determination.md` |
 | 잠재능력 / 등급 / 옵션 재설정 / 확률 / 등급 상승 | `potential_determination.md` |
+| 대장 기술 / 업그레이드 / 증강 / 기술 선택 / 더 좋은 물품 / 대장장이의 눈 / 가격 협상 / 위험 거래 | `blacksmith_upgrade.md` + `pricing_calculation.md` |
 | 가격 / 판매가 / 구매가 / 상점 / 재화 밸런싱 | `pricing_calculation.md` |
+| 재정 / 대출 / 저축 / 이자 / 상환 / 골드리치 은행 | `finance_management.md` + `pricing_calculation.md` |
 | 로그인 / 씬 전환 / 게임 루프 / FSM / 시퀀스 | `game_flow_charts.md` |
 | 신규 기능 / 컨셉 / 전반 방향성 | `concept.md` |
 
@@ -48,13 +54,24 @@
 - **대장장이 코어(Blacksmith) — 서버 권위 게임 로직** — `RootDesk/MyDesk/Blacksmith/`.
   - `GameManager.mlua` (`@Logic`, 전역 단일 세션) — 플레이어 상태 + 모든 규칙의 권위. 상태는 `@Sync` property로 HUD에 노출:
     `Meso` / `CurrentItemId` / `CubeUseCount` / `HasPotential` / `CurrentGrade` / `CurrentPrice` / `IsCurrentDestroyed` /
-    `CubesUntilRepayment` / `IsRepaymentDue` / `PendingRepayment` / `DebtStage` / `IsGameOver`.
-    (단, `CurrentPotential` 옵션 3줄은 중첩 테이블이라 `@Sync` 불가 → UI 단계에서 `@ExecSpace("Client")` RPC로 따로 전달.)
+    `CubesUntilRepayment` / `IsRepaymentDue` / `PendingRepayment` / `DebtStage` / `IsGameOver` /
+    `TotalSellCount` / `MaxSellPrice`(게임오버 기록용) / `AugmentsData`·`AugmentChoicesData`·`IsAugmentPending`(증강, CSV) /
+    `LoanUseCount`·`CanLoan`(대출) / `CurrentActivity`("lobby"/"cube"/"augment"/"finance", 로비 전이).
+    (단, `CurrentPotential` 옵션 3줄·`OwnedAugments`는 중첩 테이블이라 `@Sync` 불가 → 옵션은 Client RPC, 증강은 `AugmentsData` CSV로 전달.)
   - UI→서버 RPC 엔트리포인트(전부 `@ExecSpace("Server")`, 클라 입력 불신·서버 전량 검증):
     `_GameManager:RequestBuyItem(slotIndex)`(상점 슬롯 인덱스로 구매) / `RequestUseCube()` / `RequestSellItem()` /
-    `RequestConfirmDestroy()`(파괴 아이템 정리) / `RequestSettleDebt()`(상환·부족 시 게임오버). UI 버튼을 여기에 연결한다.
-  - `PotentialService.mlua` — 잠재 판정(`RollPotential()` → 등급+옵션 3줄). `PricingCalculator.mlua` — 판매가 산정(`Calculate(equipId, pr)` → `{destroyed, price, ...}`).
-  - `BlacksmithConfig.mlua` (`@Logic`) — 구현된 밸런스 상수의 SSOT. 시작메소/큐브비용/등급·옵션 확률/장비 5종/빚 상환표 등 모든 수치는 이 파일에서만 조정한다(기획서 값을 옮긴 코드 측 SSOT).
+    `RequestConfirmDestroy()`(파괴 아이템 정리) / `RequestSettleDebt()`(상환·부족 시 게임오버) /
+    `RequestSelectAugment(key)`(증강 3택 선택) / `RequestLoan()`(메소 대출) / `RequestRestart()`(게임오버 후 전체 초기화) /
+    `EnterActivity(name)`·`ReturnToLobby()`(로비 상태 전이). UI 버튼을 여기에 연결한다.
+  - `PotentialService.mlua` — 잠재 판정(`RollPotential(allowDestroy, equipId, validForceChance)` → 등급+옵션 3줄. equipId/validForceChance는 증강 '대장장이의 눈'용). `PricingCalculator.mlua` — 판매가 산정(`Calculate(equipId, pr)` → `{destroyed, price, ...}`).
+  - `BlacksmithConfig.mlua` (`@Logic`) — 구현된 밸런스 상수의 SSOT. 시작메소/큐브비용/등급·옵션 확률/장비 5종/빚 상환표 + **증강 4종(`augments`)·대출(`loan`)·저축(`savings`)** 등 모든 수치는 이 파일에서만 조정한다(기획서 값을 옮긴 코드 측 SSOT).
+  - **로비 허브 서버 로직(증강·재정·게임오버·재시작) — UI 없이 로직/API만** (`lobby_hub`·`blacksmith_upgrade`·`finance_management` 기획서). 세부:
+    - **대장 기술(증강)**: 상환 단계 도달(`RequestSettleDebt` 성공) 시 `RollAugmentChoices`로 3택 제시(3단계 소진 증강 제외) → `RequestSelectAugment(key)`(중복 시 단계 상승, 최대 3). 효과 배선: 더좋은물품→`RollShop` 등급확률 / 대장장이의눈→`RollLine` 유효옵션 / 가격협상→`GetEffectiveBuyCost` 구매가 / 위험거래→판매가·`ComputeRepayment` 이자.
+    - **메소 대출**: `RequestLoan()` — 조건(무기+큐브 둘 다 구매불가) 충족 시 즉시 지급 + 상환금 2배(현재 미납이면 즉시, 아니면 `LoanPenaltyPending`로 다음 상환에) + **1회 제한**(`loan.maxUses`).
+    - **게임오버 기록**: `RecordGameOver()` — 게임오버 시 5개 항목(최종메소/큐브수/판매수/최고판매가/상환단계)을 `_DataStorageService:GetGlobalDataStorage("BlacksmithRecords")` 키 `lastRun`에 저장(Credit 절약 위해 1회성).
+    - **재시작**: `RequestRestart()` — 게임오버 상태에서만, `ResetSession()`으로 현재 판 전체 리셋(증강·대출·통계 포함, DataStorage 누적은 보존).
+    - **일차 규약**: 별도 시간 시스템 없이 **일차 = `DebtStage + 1`**(A안). 서버 `GetCurrentDay()`, 클라는 직접 계산.
+    - ⚠ **판매가/상환금 표시 주의**: 위험거래·대출 적용 후 실제 상환금은 `PendingRepayment`(=`ComputeRepayment`)인데, 기존 상점/스크래치 HUD는 `GetDebtAmount()` 원본을 직접 계산해 표시 → UI 연결 시 `PendingRepayment` 기준으로 교체 필요.
 - **무기 구매 상점(Weapon shop) UI** — `RootDesk/MyDesk/Blacksmith/WeaponShopManager.mlua`(`@Component`, 클라), `ui/WeaponShopGroup.ui`.
   InGameMap 게이팅(`CurrentMapName` 폴링 + 보드 `Enable` 토글). 서버 권위로 4슬롯 추첨:
   `GameManager`의 `RollShop()` / `RequestRefreshShop()`(무료 재추첨) / `RequestBuyItem(slotIndex)`.
