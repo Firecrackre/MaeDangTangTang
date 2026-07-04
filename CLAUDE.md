@@ -14,9 +14,12 @@
 | 기획서 | 경로 | 다루는 내용 |
 |---|---|---|
 | 컨셉 | `docs/specs/concept.md` | 세계관, 핵심 재미 요소, 아트 방향성 |
+| 로비 허브 | `docs/specs/lobby_hub.md` | 큐브 스크래치·대장 기술·재정 관리 3갈래 진입 허브, 상태 확인·전략 선택, 기능 간 연결·구현 우선순위 |
 | 큐브 스크래치 시스템 | `docs/specs/cube_scratch_system.md` | 큐브 아이템 사용 메커니즘, 스크래치 UI/UX 및 조작 흐름 |
 | 잠재능력 판정 | `docs/specs/potential_determination.md` | 등급(레어~레전더리), 옵션 재설정 로직, 등급 상승·옵션 등장 확률 테이블 |
+| 대장 기술 업그레이드 | `docs/specs/blacksmith_upgrade.md` | 대장 기술 획득·선택·중복(단계 상승)·종류(더 좋은 물품/대장장이의 눈/가격 협상/위험 거래)·적용 우선순위 |
 | 판매가 산정 | `docs/specs/pricing_calculation.md` | 아이템·재화 가치 기준, 상점 판매/구매 가격 밸런싱 공식 |
+| 재정 관리 | `docs/specs/finance_management.md` | 메소 대출 서비스, 골드리치 은행 저축, 상환 압박 연동, 재정 표시 정보 |
 | 게임 흐름 | `docs/specs/game_flow_charts.md` | 로그인~인게임 루프, 콘텐츠 전환 등 전체 상태 머신(FSM)·시퀀스 |
 
 ## 작업 → 필독 기획서 매핑
@@ -24,9 +27,12 @@
 
 | 작업 키워드 | 필독 기획서 |
 |---|---|
+| 로비 / 허브 / 메인 화면 / 메뉴 선택 | `lobby_hub.md` |
 | 큐브 / 스크래치 / 큐브 UI / 큐브 아이템 | `cube_scratch_system.md` + `potential_determination.md` |
 | 잠재능력 / 등급 / 옵션 재설정 / 확률 / 등급 상승 | `potential_determination.md` |
+| 대장 기술 / 업그레이드 / 증강 / 기술 선택 / 더 좋은 물품 / 대장장이의 눈 / 가격 협상 / 위험 거래 | `blacksmith_upgrade.md` + `pricing_calculation.md` |
 | 가격 / 판매가 / 구매가 / 상점 / 재화 밸런싱 | `pricing_calculation.md` |
+| 재정 / 대출 / 저축 / 이자 / 상환 / 골드리치 은행 | `finance_management.md` + `pricing_calculation.md` |
 | 로그인 / 씬 전환 / 게임 루프 / FSM / 시퀀스 | `game_flow_charts.md` |
 | 신규 기능 / 컨셉 / 전반 방향성 | `concept.md` |
 
