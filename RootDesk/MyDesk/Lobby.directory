@@ -1,7 +1,7 @@
 {
   "Id": "",
   "GameId": "",
-  "EntryKey": "directory://9287603d13ad4d9fa9fe8201b0ba25f2",
+  "EntryKey": "directory://ed2a4397c02c411eaf9ba3538288e4f6",
   "ContentType": "x-mod/directory",
   "Content": "",
   "Usage": 0,
@@ -13,8 +13,8 @@
   "ContentProto": {
     "Use": "Json",
     "Json": {
-      "entry_id": "directory://9287603d13ad4d9fa9fe8201b0ba25f2",
-      "name": "Blacksmith",
+      "entry_id": "directory://ed2a4397c02c411eaf9ba3538288e4f6",
+      "name": "Lobby",
       "lock": false,
       "folding": false,
       "nameEditable": true

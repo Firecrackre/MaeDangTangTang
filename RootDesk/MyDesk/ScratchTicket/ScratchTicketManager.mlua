@@ -143,6 +143,9 @@ script ScratchTicketManager extends Component
             self.boardBaseX = self.board.UITransformComponent.anchoredPosition.x
         end
 
+        -- 렌더 순서 강제: 흰 배경판은 맨 뒤로, 은색 부스러기는 UI 맨 위로.
+        self:FixRenderOrder()
+
         -- 시작은 숨김(맵 게이팅 gotcha 회피: 명시적으로 끈다).
         self.isActive = false
         self.lastPotentialData = "\0"
@@ -254,6 +257,26 @@ script ScratchTicketManager extends Component
                 c.UITransformComponent.RectSize = Vector2(self.CrumbSize, self.CrumbSize)
             end
             table.insert(self.crumbs, { entity = c, ui = c.UITransformComponent, vx = 0, vy = 0, active = false })
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void FixRenderOrder()
+        -- UI 형제 렌더 순서는 배열 순서로 결정되므로(.ui displayOrder만으로는 런타임 보장 안 됨)
+        -- SetSiblingIndex로 확정한다: 흰 배경판(Board/Bg)은 Board 자식 중 맨 뒤(먼저 그림),
+        -- 은색 부스러기(CrumbLayer)는 루트 자식 중 맨 앞(가장 나중에 그림 = UI 최상단).
+        if isvalid(self.board) then
+            local bg = self.board:GetChildByName("Bg", false)
+            if isvalid(bg) and isvalid(bg.UITransformComponent) then
+                _UILogic:SetSiblingIndex(bg.UITransformComponent, 0)
+            end
+        end
+        if isvalid(self.crumbLayer) and isvalid(self.crumbLayer.UITransformComponent) then
+            local parent = self.crumbLayer.Parent
+            if isvalid(parent) then
+                local n = #parent.Children:ToTable()
+                _UILogic:SetSiblingIndex(self.crumbLayer.UITransformComponent, n - 1)
+            end
         end
     end
 

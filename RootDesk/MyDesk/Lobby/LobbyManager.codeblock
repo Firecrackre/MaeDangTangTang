@@ -1,14 +1,14 @@
 {
   "Id": "",
   "GameId": "",
-  "EntryKey": "codeblock://76b0074d-237b-4e15-bf96-c221cbede0fa",
+  "EntryKey": "codeblock://a75ae352-e05b-463d-95ad-d31ff2668286",
   "ContentType": "x-mod/codeblock",
   "Content": "",
   "Usage": 0,
   "UsePublish": 1,
   "UseService": 0,
   "CoreVersion": "26.5.0.0",
-  "StudioVersion": "0.1.0.0",
+  "StudioVersion": "",
   "DynamicLoading": 0,
   "ContentProto": {
     "Use": "Json",
@@ -22,9 +22,9 @@
         "Minor": 1
       },
       "Description": "",
-      "Id": "76b0074d-237b-4e15-bf96-c221cbede0fa",
+      "Id": "a75ae352-e05b-463d-95ad-d31ff2668286",
       "Language": 1,
-      "Name": "WeaponShopManager",
+      "Name": "LobbyManager",
       "Type": 5,
       "Source": 0,
       "Target": null

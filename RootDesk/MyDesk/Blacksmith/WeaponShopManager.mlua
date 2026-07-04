@@ -1,5 +1,5 @@
-@Component
-script WeaponShopManager extends Component
+@Logic
+script WeaponShopManager extends Logic
 
 	property string TargetMapName = "InGameMap"
 
@@ -20,6 +20,8 @@ script WeaponShopManager extends Component
 	property TextComponent repayText = "6e391414-6df0-4807-a7fb-e4a7edaaf580"
 
 	property ButtonComponent refreshButton = "74e6b918-c99b-47e4-85d5-f439731928ce"
+
+	property ButtonComponent backButton = "6c8642f1-81ce-4a1a-92d0-54af39c4f747"
 
 	property Entity hud = "5c6b7ca2-1c4e-4b1d-8e1b-a263ebe1f505"
 
@@ -53,6 +55,8 @@ script WeaponShopManager extends Component
 
 	property any refreshHandler = nil
 
+	property any backHandler = nil
+
 	property any iconEntities = nil
 
 	property any iconBaseY = nil
@@ -71,44 +75,26 @@ script WeaponShopManager extends Component
 
 	@ExecSpace("ClientOnly")
 	method void OnBeginPlay()
-		        -- 게이팅 초기화: 시작 시 보드를 명시적으로 끈다(변화감지 가드가 초기 상태를 못 잡는 gotcha 회피).
-		        if isvalid(self.board) then
-		            self.board.Enable = false
-		        end
+		        -- 슬롯/버튼 초기화 → 초기값 취득이 모두 끝난 뒤에 컨테이너를 끈다.
+		        -- (자식 조회 GetChildByName은 board가 켜져 있을 때 해야 안전 — 껐다가 조회하면 캐시가 빈다.)
 		        self.isActive = false
 		        self.selectedSlot = 0
 		        self.clickHandlers = {}
-		        self.slotEntities = {}
-		        self.iconEntities = {}
-		        self.iconBaseY = {}
 		        self.bobTime = 0
 		
-		        -- 슬롯 버튼 엔티티 캐시 + 클릭 핸들러 연결(슬롯별 인덱스를 클로저로 캡처).
-		        -- 동시에 둥둥 애니메이션용 Icon 엔티티와 기준 Y(anchoredPosition.y)도 캐싱한다.
-		        if isvalid(self.board) then
-		            for i = 1, 4 do
-		                local e = self.board:GetChildByName("Slot" .. tostring(i), true)
-		                self.slotEntities[i] = e
-		                if isvalid(e) then
-		                    local idx = i
-		                    local h = e:ConnectEvent(ButtonClickEvent, function() self:OnSlotClicked(idx) end)
-		                    table.insert(self.clickHandlers, { entity = e, eventHandler = h })
+		        -- 슬롯/아이콘 엔티티 캐싱(멱등) + 슬롯 클릭 핸들러 연결(1회).
+		        self:CacheSlots()
+		        self:WireSlotClicks()
 		
-		                    local icon = e:GetChildByName("Icon", false)
-		                    self.iconEntities[i] = icon
-		                    if isvalid(icon) and isvalid(icon.UITransformComponent) then
-		                        self.iconBaseY[i] = icon.UITransformComponent.anchoredPosition.y
-		                    end
-		                end
-		            end
-		        end
-		
-		        -- 구입/새로고침 버튼: ConnectEvent는 Entity에서 호출한다(Component 아님).
+		        -- 구입/새로고침/뒤로 버튼: ConnectEvent는 Entity에서 호출한다(Component 아님).
 		        if isvalid(self.buyButton) then
 		            self.buyHandler = self.buyButton.Entity:ConnectEvent(ButtonClickEvent, self.OnBuyClicked)
 		        end
 		        if isvalid(self.refreshButton) then
 		            self.refreshHandler = self.refreshButton.Entity:ConnectEvent(ButtonClickEvent, self.OnRefreshClicked)
+		        end
+		        if isvalid(self.backButton) then
+		            self.backHandler = self.backButton.Entity:ConnectEvent(ButtonClickEvent, self.OnBackClicked)
 		        end
 		
 		        self:SetSelectionUI(false)  -- 초기: 미선택 → 중앙 안내 표시 + 구입 비활성
@@ -121,11 +107,52 @@ script WeaponShopManager extends Component
 		        if isvalid(self.timerRoot) and isvalid(self.timerRoot.UITransformComponent) then
 		            self.timerBasePos = self.timerRoot.UITransformComponent.anchoredPosition
 		        end
-		        if isvalid(self.timerRoot) then
-		            self.timerRoot.Enable = false   -- 맵 게이팅 초기화(board/hud와 동일하게 시작 시 끔)
-		        end
 		        self:UpdateTimer()
+		
+		        -- 게이팅 초기화: 초기 캐싱/배선/기준값 취득이 끝난 뒤 컨테이너를 명시적으로 끈다
+		        -- (변화감지 가드가 초기 상태를 못 잡는 gotcha 회피). 자식 조회 이후여야 캐시가 정상.
+		        if isvalid(self.board) then self.board.Enable = false end
+		        if isvalid(self.hud) then self.hud.Enable = false end
+		        if isvalid(self.timerRoot) then self.timerRoot.Enable = false end
 		        log("[WeaponShopManager] ready. slots cached=" .. tostring(#self.slotEntities) .. ", maxCubes=" .. tostring(self.maxCubes))
+	end
+
+	@ExecSpace("ClientOnly")
+	method void CacheSlots()
+		        -- 슬롯/아이콘 엔티티를 (재)캐싱한다(멱등). board가 켜져 있어야 GetChildByName이 자식을 찾는다.
+		        -- 클릭 핸들러 연결은 여기서 하지 않는다(중복 연결 방지 — WireSlotClicks가 1회만 담당).
+		        -- 슬롯 수는 BlacksmithConfig.shopSlotCount(SSOT). Slot{i}가 없으면 isvalid 가드로 건너뛴다.
+		        self.slotEntities = {}
+		        self.iconEntities = {}
+		        self.iconBaseY = {}
+		        if not isvalid(self.board) then return end
+		        local slotCount = _BlacksmithConfig:GetData().shopSlotCount
+		        for i = 1, slotCount do
+		            local e = self.board:GetChildByName("Slot" .. tostring(i), true)
+		            self.slotEntities[i] = e
+		            if isvalid(e) then
+		                local icon = e:GetChildByName("Icon", false)
+		                self.iconEntities[i] = icon
+		                if isvalid(icon) and isvalid(icon.UITransformComponent) then
+		                    self.iconBaseY[i] = icon.UITransformComponent.anchoredPosition.y
+		                end
+		            end
+		        end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void WireSlotClicks()
+		        -- 슬롯 클릭 핸들러 연결(OnBeginPlay에서 1회). slotEntities는 CacheSlots가 채운다.
+		        -- 슬롯별 인덱스를 클로저로 캡처. 해제는 OnEndPlay의 clickHandlers 루프가 담당.
+		        if self.slotEntities == nil then return end
+		        for i = 1, #self.slotEntities do
+		            local e = self.slotEntities[i]
+		            if isvalid(e) then
+		                local idx = i
+		                local h = e:ConnectEvent(ButtonClickEvent, function() self:OnSlotClicked(idx) end)
+		                table.insert(self.clickHandlers, { entity = e, eventHandler = h })
+		            end
+		        end
 	end
 
 	@ExecSpace("ClientOnly")
@@ -144,14 +171,21 @@ script WeaponShopManager extends Component
 		        if self.refreshHandler ~= nil and isvalid(self.refreshButton) then
 		            self.refreshButton.Entity:DisconnectEvent(ButtonClickEvent, self.refreshHandler)
 		        end
+		        if self.backHandler ~= nil and isvalid(self.backButton) then
+		            self.backButton.Entity:DisconnectEvent(ButtonClickEvent, self.backHandler)
+		        end
 	end
 
 	@ExecSpace("ClientOnly")
 	method void OnUpdate(number delta)
-		        -- 맵 게이팅: InGameMap이면서 아직 아이템을 구매하지 않았을 때만 상점 표시.
+		        -- 맵 게이팅: InGameMap이면서, 로비 허브에서 '큐브 스크래치'를 눌러 상점 화면(ActiveScreen=="shop")일 때,
+		        -- 그리고 아직 아이템을 구매하지 않았을 때만 상점 표시.
 		        -- 아이템 구매 시(CurrentItemId ~= "") 상점은 숨고 큐브 스크래치 UI가 대신 노출된다.
+		        -- ActiveScreen은 _LobbyManager(클라 @Logic)가 소유하는 화면 상태 SSOT. '← 로비' 버튼으로 다시 lobby로 돌아간다.
 		        local lp = _UserService.LocalPlayer
-		        local onMap = isvalid(lp) and lp.CurrentMapName == self.TargetMapName and (_GameManager.CurrentItemId == "")
+		        local onMap = isvalid(lp) and lp.CurrentMapName == self.TargetMapName
+		            and (_GameManager.CurrentItemId == "")
+		            and (_LobbyManager.ActiveScreen == "shop")
 		        if onMap ~= self.isActive then
 		            self.isActive = onMap
 		            if isvalid(self.board) then
@@ -165,13 +199,13 @@ script WeaponShopManager extends Component
 		            end
 		        end
 		        if not onMap then return end
-
+		
 		        -- 시계/HUD는 서버 권위 큐브 사용 횟수·상환 단계로 구동(임시 클라 카운터 대체).
 		        self.currentTime = _GameManager.CubeUseCount % self.maxCubes
 		        if _GameManager.IsRepaymentDue then self.currentTime = self.maxCubes end
 		        self.roundIndex = _GameManager.DebtStage + 1
 		        self:UpdateTimer()
-
+		
 		        -- 상점 슬롯 데이터 변화 시 재렌더(서버가 ShopSlotsData를 @Sync로 내려준다).
 		        local data = _GameManager.ShopSlotsData
 		        if data ~= self.lastShopData then
@@ -192,13 +226,15 @@ script WeaponShopManager extends Component
 
 	@ExecSpace("ClientOnly")
 	method void AnimateIcons()
-		        -- 4개 슬롯 아이콘을 사인파로 위아래로 둥둥 띄운다(슬롯별 위상차로 자연스럽게).
+		        -- 슬롯 아이콘을 사인파로 위아래로 둥둥 띄운다(슬롯별 위상차로 자연스럽게).
+		        -- 슬롯 수는 config(SSOT) 기반 — 위상차도 슬롯 수에 맞춰 균등 분배한다.
 		        if self.iconEntities == nil then return end
-		        for i = 1, 4 do
+		        local slotCount = _BlacksmithConfig:GetData().shopSlotCount
+		        for i = 1, slotCount do
 		            local icon = self.iconEntities[i]
 		            if isvalid(icon) and isvalid(icon.UITransformComponent) then
 		                local baseY = self.iconBaseY[i] or 0
-		                local phase = (i - 1) * (math.pi / 2)  -- 슬롯마다 90도씩 어긋남
+		                local phase = (i - 1) * (2 * math.pi / slotCount)  -- 슬롯마다 균등 위상차
 		                local offset = self.BobAmplitude * math.sin(self.bobTime * self.BobSpeed + phase)
 		                local p = icon.UITransformComponent.anchoredPosition
 		                icon.UITransformComponent.anchoredPosition = Vector2(p.x, baseY + offset)
@@ -208,8 +244,10 @@ script WeaponShopManager extends Component
 
 	@ExecSpace("ClientOnly")
 	method void RenderShop(string data)
-		        -- "equipId:grade,equipId:grade,..." 문자열을 파싱해 4슬롯을 렌더한다.
+		        -- "equipId:grade,equipId:grade,..." 문자열을 파싱해 슬롯을 렌더한다.
 		        -- 새 상점(새로고침/구매 후 재추첨)이면 이전 선택은 무효 → 선택 해제 + 중앙 안내 복귀.
+		        -- 방어: 초기화 시점 문제로 슬롯 캐시가 비었으면 지금(보드가 켜진 상태) 다시 캐싱한다.
+		        if self.slotEntities == nil or #self.slotEntities == 0 then self:CacheSlots() end
 		        self.selectedSlot = 0
 		        self:SetSelectionUI(false)
 		        self.slotData = {}
@@ -292,6 +330,13 @@ script WeaponShopManager extends Component
 		        -- 새로고침: 서버에 상점 재추첨 요청(메소 차감 없음).
 		        log("[WeaponShopManager] request refresh shop")
 		        _GameManager:RequestRefreshShop()
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnBackClicked()
+		        -- '← 로비': 상점을 닫고 허브로 복귀(화면 상태를 lobby로). 다음 프레임에 board가 게이팅으로 숨는다.
+		        _LobbyManager.ActiveScreen = "lobby"
+		        log("[WeaponShopManager] back to lobby")
 	end
 
 	@ExecSpace("ClientOnly")

@@ -107,7 +107,7 @@ script BlacksmithConfig extends Logic
         --   같은 등급이면 무기 종류가 달라도 basePrice·buyCost가 동일하다(노말 활 == 노말 검 가격).
         --   color = 슬롯 테두리 색(등급 시각화), prob = 상점 슬롯 추첨 확률(%). prob 합 100.
         --   수치는 초기 기준안(pricing §6·§7 메소 단위 참조) — 플레이테스트로 조정.
-        d.shopSlotCount = 4  -- 상점에 동시에 노출되는 무기 슬롯 수 (UI 이미지 기준 4줄)
+        d.shopSlotCount = 3  -- 상점에 동시에 노출되는 무기 슬롯 수 (weapon_shop.md §4 기준: 3슬롯)
         d.weaponGradeOrder = {"Normal", "Fine", "Superior", "Master"}
         d.weaponGrades = {
             Normal   = { key = "Normal",   label = "노말",   basePrice = 25000,  buyCost = 9000,  prob = 50, color = {0.62, 0.64, 0.68} },
