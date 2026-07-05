@@ -1,7 +1,8 @@
 @Logic
 script LobbyManager extends Logic
     -- 뒷골목 대장장이 — InGameMap 로비 허브(클라 전용 표시/입력).
-    -- 역할: InGameMap에서 "지금 어떤 화면인가"(ActiveScreen)를 소유하는 SSOT + 3버튼 허브 표시/입력 + 상단 HUD.
+    -- 역할: InGameMap에서 "지금 어떤 화면인가"(ActiveScreen)를 소유하는 SSOT + 3버튼 허브 표시/입력.
+    --   좌/우상단 HUD(라디얼 시계·메소 박스)는 WeaponShopManager의 RoundTimer/Hud를 로비·상점 공용으로 재사용한다(여기서 안 그림).
     --   ActiveScreen: "lobby"(허브) / "shop"(무기 상점). WeaponShopManager가 이 값을 읽어 상점 노출을 게이팅한다.
     -- @Logic인 이유: _LobbyManager로 전역 접근 가능해야 WeaponShopManager(@Component)가 상태를 읽을 수 있기 때문.
     --   (ClickOnlyController 선례처럼, @Logic이 UI 엔티티 참조를 들고 버튼을 ConnectEvent한다.)
@@ -22,15 +23,12 @@ script LobbyManager extends Logic
     property ButtonComponent btnSkill = "ec5e2de3-801a-490a-8820-9d37674ceb75"   -- 대장 기술 업그레이드(준비 중)
     property ButtonComponent btnCube = "42ab2378-46ed-4abd-8ab1-c2a2653a6cd3"    -- 큐브 스크래치 → 상점 열기
     property ButtonComponent btnFinance = "6072d905-8310-4e23-8f6e-522bcf4fb0c6" -- 재정 관리(준비 중)
-    property TextComponent mesoText = "63f40d4e-e41d-4e89-a5e7-3d7c6f632c94"      -- 우상단 보유 메소(대)
-    property TextComponent mesoSubText = "c951d674-41a0-4be3-ba9b-467691da2d02"   -- 우상단 상환 필요 메소(소)
-    property TextComponent repayText = "2a03d5d0-8e0c-4361-882c-5caa986bdfc0"     -- 좌상단 상환까지 남은 큐브 횟수
+    -- 상단 HUD(좌 라디얼 시계·우 메소 박스)는 전용 HudGroup + HudManager가 전담(로비 고유 HUD 박스는 제거됨).
     property Entity toast = "63c0291c-87d6-4663-945b-643c5f71243d"                -- "준비 중" 토스트 루트
     property TextComponent toastText = "d31e443b-2f47-493e-a4ef-e2e0130706d3"     -- 토스트 텍스트
 
     -- 내부 상태.
     property boolean isActive = false      -- 허브(lobbyRoot) 표시 여부 변화감지
-    property string lastHud = ""
     property number toastTimer = 0
     property any skillHandler = nil
     property any cubeHandler = nil
@@ -89,11 +87,9 @@ script LobbyManager extends Logic
         self.isActive = showHub
         if isvalid(self.lobbyRoot) then self.lobbyRoot.Enable = showHub end
 
-        -- 아래는 허브 전용(HUD/토스트) — 허브가 아닐 땐 건너뛴다.
+        -- 아래는 허브 전용(토스트) — 허브가 아닐 땐 건너뛴다.
+        -- (상단 HUD는 WeaponShopManager의 공용 RoundTimer/Hud가 담당 — 여기선 더 이상 그리지 않는다.)
         if not showHub then return end
-
-        -- HUD 갱신(보유 메소 + 상환 필요 메소 + 상환까지 남은 큐브 횟수).
-        self:UpdateHud()
 
         -- 토스트 타이머(준비 중 안내).
         if self.toastTimer > 0 then
@@ -101,34 +97,6 @@ script LobbyManager extends Logic
             if self.toastTimer <= 0 and isvalid(self.toast) then
                 self.toast.Enable = false
             end
-        end
-    end
-
-    @ExecSpace("ClientOnly")
-    method void UpdateHud()
-        -- 서버 권위 값(_GameManager @Sync)으로 HUD 표시. 값 변화 시에만 갱신.
-        local meso = _GameManager.Meso
-        local required = _GameManager.PendingRepayment
-        if required <= 0 then
-            -- 아직 상환 시점 미도달 → 다음 상환 단계 예상 금액을 미리 보여준다.
-            required = _BlacksmithConfig:GetDebtAmount(_GameManager.DebtStage + 1)
-        end
-        local untilRepay = _GameManager.CubesUntilRepayment
-        local cycle = _BlacksmithConfig:GetData().debtCycle
-
-        local key = tostring(meso) .. "|" .. tostring(required) .. "|" .. tostring(untilRepay)
-        if key == self.lastHud then return end
-        self.lastHud = key
-
-        if isvalid(self.mesoText) then
-            self.mesoText.Text = self:Comma(meso)
-        end
-        if isvalid(self.mesoSubText) then
-            self.mesoSubText.Text = "상환 필요 " .. self:Comma(required)
-        end
-        if isvalid(self.repayText) then
-            -- 다음 상환까지 남은 큐브 사용 횟수 (제한 횟수 표시).
-            self.repayText.Text = "상환까지 " .. tostring(untilRepay) .. "/" .. tostring(cycle)
         end
     end
 
@@ -161,18 +129,5 @@ script LobbyManager extends Logic
             self.toast.Enable = true
         end
         self.toastTimer = 2.0
-    end
-
-    method string Comma(integer n)
-        -- 천 단위 콤마 문자열(가격/메소용).
-        local s = tostring(n)
-        local out = ""
-        local cnt = 0
-        for i = #s, 1, -1 do
-            out = string.sub(s, i, i) .. out
-            cnt = cnt + 1
-            if cnt % 3 == 0 and i > 1 then out = "," .. out end
-        end
-        return out
     end
 end

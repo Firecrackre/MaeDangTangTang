@@ -19,6 +19,7 @@
 | 잠재능력 판정 | `docs/specs/potential_determination.md` | 등급(레어~레전더리), 옵션 재설정 로직, 등급 상승·옵션 등장 확률 테이블 |
 | 대장 기술 업그레이드 | `docs/specs/blacksmith_upgrade.md` | 대장 기술 획득·선택·중복(단계 상승)·종류(더 좋은 물품/대장장이의 눈/가격 협상/위험 거래)·적용 우선순위 |
 | 판매가 산정 | `docs/specs/pricing_calculation.md` | 아이템·재화 가치 기준, 상점 판매/구매 가격 밸런싱 공식 |
+| 무기 상점 | `docs/specs/weapon_shop.md` | 상점 슬롯·무기 종류/등급·구매·갱신·판매가 티어(as-built 정합화) |
 | 재정 관리 | `docs/specs/finance_management.md` | 메소 대출 서비스, 골드리치 은행 저축, 상환 압박 연동, 재정 표시 정보 |
 | 게임 흐름 | `docs/specs/game_flow_charts.md` | 로그인~인게임 루프, 콘텐츠 전환 등 전체 상태 머신(FSM)·시퀀스 |
 
@@ -32,6 +33,7 @@
 | 잠재능력 / 등급 / 옵션 재설정 / 확률 / 등급 상승 | `potential_determination.md` |
 | 대장 기술 / 업그레이드 / 증강 / 기술 선택 / 더 좋은 물품 / 대장장이의 눈 / 가격 협상 / 위험 거래 | `blacksmith_upgrade.md` + `pricing_calculation.md` |
 | 가격 / 판매가 / 구매가 / 상점 / 재화 밸런싱 | `pricing_calculation.md` |
+| 무기 상점 / 상점 슬롯 / 무기 구매 / 무기 등급 / 새로고침 | `weapon_shop.md` + `pricing_calculation.md` |
 | 재정 / 대출 / 저축 / 이자 / 상환 / 골드리치 은행 | `finance_management.md` + `pricing_calculation.md` |
 | 로그인 / 씬 전환 / 게임 루프 / FSM / 시퀀스 | `game_flow_charts.md` |
 | 신규 기능 / 컨셉 / 전반 방향성 | `concept.md` |
@@ -71,18 +73,27 @@
     - **게임오버 기록**: `RecordGameOver()` — 게임오버 시 5개 항목(최종메소/큐브수/판매수/최고판매가/상환단계)을 `_DataStorageService:GetGlobalDataStorage("BlacksmithRecords")` 키 `lastRun`에 저장(Credit 절약 위해 1회성).
     - **재시작**: `RequestRestart()` — 게임오버 상태에서만, `ResetSession()`으로 현재 판 전체 리셋(증강·대출·통계 포함, DataStorage 누적은 보존).
     - **일차 규약**: 별도 시간 시스템 없이 **일차 = `DebtStage + 1`**(A안). 서버 `GetCurrentDay()`, 클라는 직접 계산.
-    - ⚠ **판매가/상환금 표시 주의**: 위험거래·대출 적용 후 실제 상환금은 `PendingRepayment`(=`ComputeRepayment`)인데, 기존 상점/스크래치 HUD는 `GetDebtAmount()` 원본을 직접 계산해 표시 → UI 연결 시 `PendingRepayment` 기준으로 교체 필요.
-- **무기 구매 상점(Weapon shop) UI** — `RootDesk/MyDesk/Blacksmith/WeaponShopManager.mlua`(`@Component`, 클라), `ui/WeaponShopGroup.ui`.
-  InGameMap 게이팅(`CurrentMapName` 폴링 + 보드 `Enable` 토글). 서버 권위로 4슬롯 추첨:
+    - ✔ **상환금 표시(해결됨)**: 위험거래·대출 적용 후 실제 상환금은 `PendingRepayment`(=`ComputeRepayment`). 공용 상단 HUD(`HudManager`)가 상환 필요 메소를 `PendingRepayment` 우선(미보류 시 `GetDebtAmount(DebtStage+1)` 폴백)으로 표시하도록 이미 정합화됨.
+- **무기 구매 상점(Weapon shop) UI** — `RootDesk/MyDesk/Blacksmith/WeaponShopManager.mlua`(`@Logic`, 클라), `ui/WeaponShopGroup.ui`.
+  **상점 보드/슬롯 전용**(좌 시계·우 메소 상단 HUD는 아래 공용 HudManager 소관 — WeaponShopManager는 더 이상 HUD를 그리지 않는다).
+  InGameMap+상점 화면(`ActiveScreen=="shop"`) 게이팅(`CurrentMapName` 폴링 + 보드 `Enable` 토글). 서버 권위로 N슬롯(config `shopSlotCount`) 추첨:
   `GameManager`의 `RollShop()` / `RequestRefreshShop()`(무료 재추첨) / `RequestBuyItem(slotIndex)`.
   슬롯은 `@Sync string ShopSlotsData`("equipId:grade,…" CSV)로 클라 전달(중첩테이블 @Sync 불가 회피). 한 상점 내 동일 (무기+등급) 조합 중복 없음.
   - **무기 등급 ≠ 잠재능력 등급.** 상점 등급(`BlacksmithConfig.weaponGrades`: Normal/Fine/Superior/Master)은 판매공식의 **"기본 판매가(basePrice)" 티어**다. 같은 등급이면 무기 종류가 달라도 동일 가격, 무기 종류는 유효 스탯·아이콘만 결정. 구매 시 `CurrentBasePrice` 저장 → `RequestUseCube`에서 `pr.baseOverride`로 넘겨 판매가 계산에 반영(PricingCalculator 시그니처 불변).
   - 슬롯/상세 아이콘은 아바타 무기 아이템 RUID → `SpriteGUIRendererComponent.ImageRUID`에 `"thumbnail://" .. ruid`로 설정.
 - **클릭 전용 캐릭터 처리** — `RootDesk/MyDesk/Player/ClickOnlyController.mlua`(`@Logic`, 클라). 로컬 플레이어 `Visible=false` + `PlayerControllerComponent.Enable=false`(이동 입력 차단). Global 모델은 읽기전용이라 런타임에서 처리.
 - **복권 긁기(Scratch-ticket) UI** — `RootDesk/MyDesk/ScratchTicket/`, `ui/ScratchTicketGroup.ui`.
-  `ScratchTicketManager.mlua`가 3장의 은박 픽셀캔버스(`PixelGUIRendererComponent`)를 숨겨진 "당첨" 레이어 위에 깔고,
+  `ScratchTicketManager.mlua`(`@Component`)가 3장의 은박 픽셀캔버스(`PixelGUIRendererComponent`)를 숨겨진 "당첨" 레이어 위에 깔고,
   클릭/드래그로 알파를 깎아 긁음(70% 도달 시 완료 이벤트). 격자해상도/브러시반경/강도/완료기준/대상맵은
   데이터테이블 `ScratchTicketConfig.userdataset`+`.csv`(`_DataService:GetTable`)로 구동, 없으면 인스펙터 기본값 폴백.
+  (좌 시계·우 메소 상단 HUD는 아래 공용 HudManager 소관 — 스크래치 매니저에서 제거됨.)
+- **상단 HUD(로비/상점/스크래치 공용) — `RootDesk/MyDesk/Hud/HudManager.mlua`(`@Logic`, 클라) + `ui/HudGroup.ui`.**
+  InGameMap에서 상시 표시(맵 게이팅: `CurrentMapName=="InGameMap"`으로 `hudRoot.Enable`). 값은 전부 서버 권위 `_GameManager` @Sync.
+  - 좌상단 라디얼 시계('현재 시간') = `used = CubeUseCount % 5` → **n/5(올라가는 방식**, 상환 시점 5/5). `TimerFill.FillAmount`로 채움.
+  - 우상단 메소 박스 = '현재 소유 메소: {Meso}'(충분 초록/부족 빨강) + '상환 필요 메소: {required}'(`required = PendingRepayment>0 ? PendingRepayment : GetDebtAmount(DebtStage+1)`).
+  - 임박 연출: 3/5부터 시계 흔들림, 4/5부터 중앙 라벨 빨강 깜빡 + 메소 부족 시 상환필요 텍스트 빨강↔골드(`UpdateWarningFX`).
+  - `HudGroup`은 `GroupType=1/GroupOrder=0`(다른 화면 그룹이 위에 얹힘). in-group `@Component`가 없어 루트 `Enable` 게이팅이 안전(LobbyGroup과 동일).
+  - ⚠ 과거 이 HUD가 `WeaponShopManager`·`ScratchTicketManager`·`LobbyGroup`에 3벌 중복돼 있었으나 제거·통합함(UI Layer도 단일 `HudGroup`).
 
 ## 검증된 gotcha (이 프로젝트에서 실제로 디버깅함)
 - **UI 히트테스트 좌표공간이 두 개다.** `UITransformComponent:GetWorldCorners()`는 **UI-캔버스 월드**(수백 단위)를

@@ -24,7 +24,7 @@ script GameManager extends Logic
 
     -- 구매한 아이템의 무기 등급 정보(상점 등급 = 기본 판매가 티어). 판매가 계산의 base로 사용.
     @Sync property integer CurrentBasePrice = 0    -- 현재 아이템의 기본 판매가(구매 등급 basePrice)
-    @Sync property string CurrentWeaponGrade = ""  -- 현재 아이템의 무기 등급 key(Normal/Fine/...)
+    @Sync property string CurrentWeaponGrade = ""  -- 현재 아이템의 무기 등급 key(Common/Rare/Epic/Unique/Legendary)
 
     -- 현재 아이템의 잠재 결과 요약(@Sync로 HUD가 읽음). 옵션 3줄 전체는 아래 CurrentPotential에 보관. (flow §8)
     @Sync property boolean HasPotential = false      -- 현재 아이템에 큐브를 1회 이상 사용했는지
@@ -476,6 +476,19 @@ script GameManager extends Logic
         return _BlacksmithConfig:GetAugmentStageValue(key, stage)
     end
 
+    method integer GetSyncedAugmentStage(string key)
+        -- @Sync AugmentsData("key:stage,...")에서 증강 단계 파싱. 미보유면 0.
+        -- ⚠ OwnedAugments(서버전용 중첩테이블, @Sync 불가)를 읽는 GetAugmentStage와 달리, @Sync 문자열만
+        --    파싱하므로 클라이언트 UI에서도 서버와 동일한 결과를 낸다(구매가 표시 정합용). ShopSlotsData 파싱 패턴.
+        if self.AugmentsData == nil or self.AugmentsData == "" then return 0 end
+        for token in string.gmatch(self.AugmentsData, "([^,]+)") do
+            local k = string.match(token, "([^:]+):")
+            local s = string.match(token, ":([^:]+)")
+            if k == key then return tonumber(s) or 0 end
+        end
+        return 0
+    end
+
     @ExecSpace("ServerOnly")
     method void SerializeAugments()
         -- OwnedAugments를 "key:stage,..." @Sync 문자열로 직렬화(augmentOrder 순서 유지). ShopSlotsData 패턴.
@@ -563,7 +576,10 @@ script GameManager extends Logic
 
     method integer GetEffectiveBuyCost(integer baseCost)
         -- 증강 '가격 협상' 구매가 감소(%) 적용. 1000단위 반올림. 미보유면 원가.
-        local pct = self:GetAugmentStageValueFor("priceNego")
+        -- @Sync AugmentsData 기반(GetSyncedAugmentStage)이라 서버 차감액과 클라 표시값이 항상 일치한다.
+        local stage = self:GetSyncedAugmentStage("priceNego")
+        if stage <= 0 then return baseCost end
+        local pct = _BlacksmithConfig:GetAugmentStageValue("priceNego", stage)
         if pct <= 0 then return baseCost end
         local reduced = baseCost * (1 - pct / 100)
         return math.floor(reduced / 1000 + 0.5) * 1000

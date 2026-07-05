@@ -37,11 +37,6 @@ script ScratchTicketManager extends Component
     property Entity reuseButton = "aabf3d1a-7f60-45b3-820f-93746fb52b1e"
     property Entity sellButton = "c4912f88-2d35-4e7e-a1e2-b017fc3aa5e9"
 
-    -- left clock (reused radial timer)
-    property Entity timerRoot = "050befc0-9375-4ce5-9b62-9413440aff01"
-    property SpriteGUIRendererComponent timerFill = "9a11f3ee-44ac-46f3-87ad-b0d6bb64a471"
-    property TextComponent timerLabel = "deb12f5e-e9ea-45d1-93a7-c19bc2117245"
-
     -- left cube selection
     property Entity cubeSelect = "e6cf1fe6-1ae7-4210-a570-d184ab37c929"
     property Entity cubeIconWeird = "bf940d39-30d2-461e-950d-628d6f09e300"
@@ -51,10 +46,7 @@ script ScratchTicketManager extends Component
     property TextComponent weirdBuyText = "a7b556a9-bf0b-48e2-b0a3-35acd579dbe1"
     property TextComponent masterBuyText = "f15c2ada-ee42-4391-b49e-2d0bb3bbdb6b"
 
-    -- right meso HUD + price window
-    property Entity hud = "c80805f7-3063-4cfa-b228-7b0a752b8b87"
-    property TextComponent mesoText = "da1d3963-784a-4c47-8180-9d57a83a8b65"
-    property TextComponent repayText = "e8469e05-01f1-4e1f-85e2-22765ae72d7a"
+    -- right price window
     property Entity priceWindow = "626f0e14-b1d2-455c-96b4-9f60e373e960"
     property TextComponent priceText = "18c964d8-d113-4dc4-84a4-308589167166"
 
@@ -79,10 +71,7 @@ script ScratchTicketManager extends Component
     property any crumbs = nil
     property integer crumbCursor = 0
 
-    property integer maxCubes = 5
     property string lastPotentialData = ""
-    property string lastHudKey = ""
-    property string lastClockKey = ""
     property string lastCubeType = "weird"
 
     property any optionLines = nil       -- parsed 3-line data {label,value,unit,optionType,isBonus,isDestroy,isValid,revealed}
@@ -114,7 +103,6 @@ script ScratchTicketManager extends Component
 
         self.clickRecords = {}
         self.enterRecords = {}
-        self.maxCubes = _BlacksmithConfig:GetData().debtCycle
         self.optionLines = {}
         self.rainbowLines = {}
 
@@ -309,8 +297,6 @@ script ScratchTicketManager extends Component
             end
         end
 
-        self:UpdateClock()
-        self:UpdateHud()
         self:UpdateHoverFX(delta)
         self:UpdateRainbow(delta)
         self:UpdateDestroy(delta)
@@ -321,9 +307,7 @@ script ScratchTicketManager extends Component
     method void SetContainersActive(boolean on)
         -- 루트 직속 컨테이너들을 한꺼번에 토글(board/시계/큐브선택/HUD). 판매가창은 별도(공개 완료 시만).
         if isvalid(self.board) then self.board.Enable = on end
-        if isvalid(self.timerRoot) then self.timerRoot.Enable = on end
         if isvalid(self.cubeSelect) then self.cubeSelect.Enable = on end
-        if isvalid(self.hud) then self.hud.Enable = on end
         if not on and isvalid(self.priceWindow) then self.priceWindow.Enable = false end
         if not on then self:HideConfirmSell() end
         if not on then self.scratchReady = false end   -- 맵 이탈/아이템 없음 → 긁기 차단.
@@ -470,6 +454,7 @@ script ScratchTicketManager extends Component
         if touchId < 1 then return end
         if self.tickets == nil then return end
         if self.revealedCount >= 3 then return end  -- 모두 공개되면 긁기 불필요
+        if self.destroyPending then return end  -- 파괴 연출 중에는 나머지 줄 긁기 차단
         local worldPt = _UILogic:ScreenToWorldPosition(touchPoint)
         for i = 1, #self.tickets do
             local t = self.tickets[i]
@@ -564,17 +549,33 @@ script ScratchTicketManager extends Component
         end
         self.revealedCount = self.revealedCount + 1
         log("[ScratchTicket] line " .. index .. " revealed (" .. self.revealedCount .. "/3)")
+        if o ~= nil and o.isDestroy then
+            -- 파괴 줄 공개 즉시: 나머지 줄을 기다리지 않고 바로 흔들림 연출 → 메인메뉴 복귀. (cube_scratch_system §9)
+            self:StartDestroySequence()
+            return
+        end
         if self.revealedCount >= 3 then
             self:OnAllRevealed()
         end
     end
 
     @ExecSpace("ClientOnly")
+    method void StartDestroySequence()
+        -- 파괴 확정: 흔들림 연출 시작(UpdateDestroy가 이어받아 ~1.2초 후 RequestConfirmDestroy→상점 복귀).
+        if self.destroyPending then return end   -- 중복 트리거 방지
+        self.destroyPending = true
+        self.destroyTimer = 0
+        self:SetButtonEnabled(self.reuseButton, false)
+        self:SetButtonEnabled(self.sellButton, false)
+        log("[ScratchTicket] destroy sequence started")
+    end
+
+    @ExecSpace("ClientOnly")
     method void OnAllRevealed()
         -- 3줄 공개 완료: 파괴면 짧은 연출 후 자동 복귀, 아니면 판매가 표시 + 판매/재사용 활성.
         if _GameManager.IsCurrentDestroyed then
-            self.destroyPending = true
-            self.destroyTimer = 0
+            -- 안전망: 조기 트리거를 놓친 경우에도 파괴 연출 보장.
+            self:StartDestroySequence()
             log("[ScratchTicket] all revealed -> DESTROYED, auto-confirm pending")
             return
         end
@@ -606,47 +607,6 @@ script ScratchTicketManager extends Component
             _GameManager:RequestConfirmDestroy()
         end
     end
-
-    @ExecSpace("ClientOnly")
-    method void UpdateClock()
-        -- 좌상단 시계: 큐브 사용 횟수 기준 라디얼 채움 + 라벨(서버 @Sync 구동).
-        local used = _GameManager.CubeUseCount % self.maxCubes
-        if _GameManager.IsRepaymentDue then used = self.maxCubes end
-        local key = tostring(used)
-        if key == self.lastClockKey then return end
-        self.lastClockKey = key
-        if isvalid(self.timerFill) then
-            self.timerFill.FillAmount = used / self.maxCubes
-        end
-        if isvalid(self.timerLabel) then
-            self.timerLabel.Text = tostring(used) .. "/" .. tostring(self.maxCubes)
-        end
-    end
-
-    @ExecSpace("ClientOnly")
-    method void UpdateHud()
-        -- 우상단 메소/상환 HUD. 부족 시 메소 빨강.
-        local meso = _GameManager.Meso
-        local required = _GameManager.PendingRepayment
-        if required <= 0 then
-            required = _BlacksmithConfig:GetDebtAmount(_GameManager.DebtStage + 1)
-        end
-        local key = tostring(meso) .. "|" .. tostring(required)
-        if key == self.lastHudKey then return end
-        self.lastHudKey = key
-        if isvalid(self.mesoText) then
-            self.mesoText.Text = "현재 소유 메소: " .. self:Comma(meso)
-            if meso >= required then
-                self.mesoText.FontColor = Color(0.3, 0.85, 0.3, 1)
-            else
-                self.mesoText.FontColor = Color(1, 0.3, 0.3, 1)
-            end
-        end
-        if isvalid(self.repayText) then
-            self.repayText.Text = "상환 필요 메소: " .. self:Comma(required)
-        end
-    end
-
     @ExecSpace("ClientOnly")
     method void UpdateHoverFX(number delta)
         -- 큐브 아이콘 호버 시 살짝 확대 + Z회전 진동(부들부들). 해제 시 원복.

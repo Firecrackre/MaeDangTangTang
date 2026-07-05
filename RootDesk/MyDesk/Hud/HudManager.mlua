@@ -1,0 +1,171 @@
+@Logic
+script HudManager extends Logic
+    -- 뒷골목 대장장이 — 로비/상점/스크래치 공용 상단 HUD(클라 전용 표시).
+    -- 좌상단 라디얼 시계("현재 시간" + n/5) / 우상단 메소 박스("현재 소유 메소" · "상환 필요 메소").
+    -- 이전엔 WeaponShopManager/ScratchTicketManager에 HUD 갱신 로직이 중복 존재했으나, 이 매니저로 일원화하고
+    --   UI 엔티티도 전용 HudGroup.ui 하나로 통합했다(단일 출처).
+    -- @Logic 이유: 전역 단일 표시 매니저 + HudGroup엔 in-group @Component가 없어 루트 Enable 게이팅이 안전.
+    -- 값은 전부 서버 권위 @Sync(_GameManager). 여기서는 표시만 담당한다.
+
+    property string TargetMapName = "InGameMap"
+
+    -- UI 참조(HudGroup.ui). UUID는 HudGroup 생성 시 확정.
+    property Entity hudRoot = "c33fb761-361b-4fbe-80ca-14d3dc76e420"                    -- HudGroup 루트(맵 게이팅 대상)
+    property Entity timerRoot = "579e17d5-436d-4891-83ec-1b0680a220e7"                  -- 좌상단 라디얼 시계 루트(흔들림 대상)
+    property SpriteGUIRendererComponent timerFill = "f98da801-6b53-4fc8-b737-6a25ec2867f7"  -- 라디얼 채움(FillAmount)
+    property TextComponent timerLabel = "02268e21-ec76-4f41-bd49-bb19c7c53018"          -- 중앙 "n/5" 라벨
+    property CanvasGroupComponent timerLabelCanvas = "02268e21-ec76-4f41-bd49-bb19c7c53018" -- 위와 같은 엔티티(깜빡 알파용)
+    property TextComponent mesoText = "02481a8c-1e99-4a11-9c52-16c10bd14652"            -- 우상단 현재 소유 메소
+    property TextComponent repayText = "11dd3c0d-7633-49af-bb75-5ef36085be80"           -- 우상단 상환 필요 메소
+
+    -- 내부 상태.
+    property integer maxCubes = 5
+    property number warnTime = 0
+    property Vector2 timerBasePos = Vector2(0, 0)
+    property string lastClockKey = ""
+    property string lastHudKey = ""
+
+    @ExecSpace("ClientOnly")
+    method void OnBeginPlay()
+        -- 최대 칸 수(상환 주기)는 config의 debtCycle = SSOT.
+        self.maxCubes = _BlacksmithConfig:GetData().debtCycle
+        self.warnTime = 0
+        if isvalid(self.timerRoot) and isvalid(self.timerRoot.UITransformComponent) then
+            self.timerBasePos = self.timerRoot.UITransformComponent.anchoredPosition
+        end
+        -- 게이팅 초기화: 시작 시 HUD를 명시적으로 끈다(변화감지 가드가 초기 상태를 못 잡는 gotcha 회피).
+        if isvalid(self.hudRoot) then self.hudRoot.Enable = false end
+        log("[HudManager] ready. maxCubes=" .. tostring(self.maxCubes))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnUpdate(number delta)
+        -- InGameMap이면 로비/상점/스크래치 어느 화면이든 HUD 상시 표시(아이템 유무 무관).
+        -- 각 화면 그룹은 HudGroup(GroupOrder=0) 위에 얹혀 렌더된다.
+        local lp = _UserService.LocalPlayer
+        local onInGame = isvalid(lp) and lp.CurrentMapName == self.TargetMapName
+
+        -- 매 프레임 멱등 적용(초기 프레임/경합 안전).
+        if isvalid(self.hudRoot) then self.hudRoot.Enable = onInGame end
+        if not onInGame then return end
+
+        self:UpdateClock()
+        self:UpdateHud()
+        self:UpdateWarningFX(delta)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateClock()
+        -- 서버 권위 큐브 사용 횟수로 라디얼을 채운다(0/5에서 시작해 상환 시점 5/5로 증가).
+        local used = _GameManager.CubeUseCount % self.maxCubes
+        if _GameManager.IsRepaymentDue then used = self.maxCubes end
+        local key = tostring(used)
+        if key == self.lastClockKey then return end
+        self.lastClockKey = key
+        if isvalid(self.timerFill) then
+            self.timerFill.FillAmount = used / self.maxCubes
+        end
+        if isvalid(self.timerLabel) then
+            self.timerLabel.Text = tostring(used) .. "/" .. tostring(self.maxCubes)
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateHud()
+        -- 현재 소유 메소(충분 초록/부족 빨강) + 이번 라운드 상환 필요 메소. 값 변화 시에만 갱신.
+        -- repayText의 FontColor는 여기서 건드리지 않는다 — 임박 깜빡임은 UpdateWarningFX가 단독 관리.
+        local meso = _GameManager.Meso
+        -- 실효 상환금 PendingRepayment(위험거래 이자·대출 페널티 반영) 우선, 미보류 시 다음 단계 원본가 폴백.
+        local required = (_GameManager.PendingRepayment > 0) and _GameManager.PendingRepayment or _BlacksmithConfig:GetDebtAmount(_GameManager.DebtStage + 1)
+        local key = tostring(meso) .. "|" .. tostring(required)
+        if key == self.lastHudKey then return end
+        self.lastHudKey = key
+
+        if isvalid(self.mesoText) then
+            self.mesoText.Text = "현재 소유 메소: " .. self:Comma(meso)
+            if meso >= required then
+                self.mesoText.FontColor = Color(0.3, 0.85, 0.3, 1)   -- 충분 → 초록
+            else
+                self.mesoText.FontColor = Color(1, 0.3, 0.3, 1)      -- 부족 → 빨강
+            end
+        end
+        if isvalid(self.repayText) then
+            self.repayText.Text = "상환 필요 메소: " .. self:Comma(required)
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateWarningFX(number delta)
+        -- 임박 연출 2단계:
+        --   shakeOn(3/5부터): 시계가 주기적으로 짧게 흔들림.
+        --   urgentOn(4/5부터): + 중앙 "n/5" 라벨 빨강 깜빡, + 메소 부족 시 상환필요 텍스트 빨강↔골드.
+        local goldColor = Color(1, 0.831, 0.475, 1)
+        local used = _GameManager.CubeUseCount % self.maxCubes
+        if _GameManager.IsRepaymentDue then used = self.maxCubes end
+        local shakeOn = used >= (self.maxCubes - 2)   -- 3/5,4/5,5/5
+        local urgentOn = used >= (self.maxCubes - 1)  -- 4/5,5/5
+
+        if shakeOn then
+            self.warnTime = self.warnTime + delta
+            local blinkOn = (math.floor(self.warnTime / 0.3) % 2 == 0)
+
+            -- (a) 부들부들: 2.5초 주기 중 앞 0.35초만 미세 흔들림
+            if isvalid(self.timerRoot) and isvalid(self.timerRoot.UITransformComponent) then
+                if (self.warnTime % 2.5) < 0.35 then
+                    local jx = (_UtilLogic:RandomDouble() - 0.5) * 8
+                    local jy = (_UtilLogic:RandomDouble() - 0.5) * 8
+                    self.timerRoot.UITransformComponent.anchoredPosition =
+                        Vector2(self.timerBasePos.x + jx, self.timerBasePos.y + jy)
+                else
+                    self.timerRoot.UITransformComponent.anchoredPosition = self.timerBasePos
+                end
+            end
+
+            if urgentOn then
+                -- (b) 라벨 빨강 + 깜빡(글자+외곽선 통째)
+                if isvalid(self.timerLabel) then
+                    self.timerLabel.FontColor = Color(1, 0.15, 0.15, 1)
+                end
+                if isvalid(self.timerLabelCanvas) then
+                    self.timerLabelCanvas.GroupAlpha = blinkOn and 1.0 or 0.1
+                end
+                -- (c) 메소 부족 시 상환필요메소 빨강↔골드
+                if isvalid(self.repayText) then
+                    local required = (_GameManager.PendingRepayment > 0) and _GameManager.PendingRepayment or _BlacksmithConfig:GetDebtAmount(_GameManager.DebtStage + 1)
+                    if _GameManager.Meso < required and blinkOn then
+                        self.repayText.FontColor = Color(1, 0.2, 0.2, 1)
+                    else
+                        self.repayText.FontColor = goldColor
+                    end
+                end
+            else
+                -- 3/5: 흔들리기만 — 라벨/상환텍스트 평상
+                if isvalid(self.timerLabel) then self.timerLabel.FontColor = Color(1, 1, 1, 1) end
+                if isvalid(self.timerLabelCanvas) then self.timerLabelCanvas.GroupAlpha = 1.0 end
+                if isvalid(self.repayText) then self.repayText.FontColor = goldColor end
+            end
+        else
+            -- 평상 복원(<=2/5)
+            self.warnTime = 0
+            if isvalid(self.timerRoot) and isvalid(self.timerRoot.UITransformComponent) then
+                self.timerRoot.UITransformComponent.anchoredPosition = self.timerBasePos
+            end
+            if isvalid(self.timerLabel) then self.timerLabel.FontColor = Color(1, 1, 1, 1) end
+            if isvalid(self.timerLabelCanvas) then self.timerLabelCanvas.GroupAlpha = 1.0 end
+            if isvalid(self.repayText) then self.repayText.FontColor = goldColor end
+        end
+    end
+
+    method string Comma(integer n)
+        -- 천 단위 콤마 문자열(가격/메소용).
+        local s = tostring(n)
+        local out = ""
+        local cnt = 0
+        for i = #s, 1, -1 do
+            out = string.sub(s, i, i) .. out
+            cnt = cnt + 1
+            if cnt % 3 == 0 and i > 1 then out = "," .. out end
+        end
+        return out
+    end
+end
