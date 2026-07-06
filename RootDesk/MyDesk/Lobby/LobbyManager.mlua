@@ -115,8 +115,12 @@ script LobbyManager extends Logic
 
     @ExecSpace("ClientOnly")
     method void OnFinanceClicked()
-        -- 재정 관리: 이번 버전 미구현(준비 중 안내).
-        self:ShowToast("재정 관리는 준비 중입니다")
+        -- 재정 관리 페이지 진입(FinanceManager가 화면 전환·표시 담당).
+        if isvalid(_FinanceManager) then
+            _FinanceManager:Open()
+        else
+            self:ShowToast("재정 관리를 열 수 없습니다")
+        end
     end
 
     @ExecSpace("ClientOnly")

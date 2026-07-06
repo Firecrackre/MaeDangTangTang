@@ -18,12 +18,27 @@ script HudManager extends Logic
     property TextComponent mesoText = "02481a8c-1e99-4a11-9c52-16c10bd14652"            -- 우상단 현재 소유 메소
     property TextComponent repayText = "11dd3c0d-7633-49af-bb75-5ef36085be80"           -- 우상단 상환 필요 메소
 
+    -- 재정 관리: 대출 빚 표시 박스 + 대출 유도 슬라이드 팝업(UUID는 UIBuilder write({bind})로 주입).
+    property Entity debtBox = "1a39278a-8f91-428c-9e34-29c2e3d894d7"          -- '현재 빚' 박스 루트(Debt>0일 때만 Enable)
+    property TextComponent debtText = "995dab86-fb01-4934-944e-e9097a5ec5cd" -- '현재 빚' 텍스트
+    property Entity loanPopup = "682736f8-1354-45f4-af4b-07f011f9a94d"        -- '대출하러 가기!' 슬라이드 팝업(버튼+CanvasGroup)
+
     -- 내부 상태.
     property integer maxCubes = 5
     property number warnTime = 0
     property Vector2 timerBasePos = Vector2(0, 0)
     property string lastClockKey = ""
     property string lastHudKey = ""
+
+    -- 대출 유도 팝업 슬라이드 상태.
+    --   박스 슬롯 규약(Hud 패널 기준, anchoredPosition.y): MesoBox 0 / RepayBox -84 / DebtBox -168.
+    --   팝업 목표 y: 빚 없으면 RepayBox 아래(-168), 빚 있으면 DebtBox 아래(-252).
+    --   숨김 y = 목표 y + 84 → 바로 위 박스 뒤에 겹쳐 숨었다가 스르륵 내려온다.
+    property number popupSlotH = 84         -- 박스 한 칸 높이(74) + 간격(10)
+    property number popupSpeed = 400        -- 슬라이드 속도(px/s)
+    property number popupY = -84            -- 현재 팝업 y(초기 = 빚 없을 때 숨김 위치)
+    property boolean loanPopupActive = false -- 등장/체류/퇴장 애니메이션 진행 중 여부
+    property any loanPopupHandler = nil
 
     @ExecSpace("ClientOnly")
     method void OnBeginPlay()
@@ -35,7 +50,30 @@ script HudManager extends Logic
         end
         -- 게이팅 초기화: 시작 시 HUD를 명시적으로 끈다(변화감지 가드가 초기 상태를 못 잡는 gotcha 회피).
         if isvalid(self.hudRoot) then self.hudRoot.Enable = false end
+
+        -- 대출 유도 팝업 초기화: 숨김 위치로 스냅 + 비활성. 클릭 시 재정 관리 진입.
+        self.loanPopupActive = false
+        self.popupY = -self.popupSlotH  -- 빚 없을 때 숨김 y(= -84)
+        if isvalid(self.loanPopup) then
+            self.loanPopup.Enable = false
+            self.loanPopupHandler = self.loanPopup:ConnectEvent(ButtonClickEvent, self.OnLoanPopupClicked)
+            -- 팝업을 상단 박스(MesoBox/RepayBox/DebtBox)보다 뒤에 렌더 → 박스 뒤에서 스르륵 내려오는 연출.
+            --   (형제 렌더 순서는 배열 순서. 인덱스 1 = 맨 뒤.)
+            if isvalid(self.loanPopup.UITransformComponent) then
+                _UILogic:SetSiblingIndex(self.loanPopup.UITransformComponent, 1)
+            end
+        end
+        if isvalid(self.debtBox) then self.debtBox.Enable = false end
         log("[HudManager] ready. maxCubes=" .. tostring(self.maxCubes))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnEndPlay()
+        -- 연결한 팝업 클릭 이벤트 해제(필수).
+        if self.loanPopupHandler ~= nil and isvalid(self.loanPopup) then
+            self.loanPopup:DisconnectEvent(ButtonClickEvent, self.loanPopupHandler)
+        end
+        self.loanPopupHandler = nil
     end
 
     @ExecSpace("ClientOnly")
@@ -51,7 +89,9 @@ script HudManager extends Logic
 
         self:UpdateClock()
         self:UpdateHud()
+        self:UpdateDebt()
         self:UpdateWarningFX(delta)
+        self:UpdateLoanPopup(delta)
     end
 
     @ExecSpace("ClientOnly")
@@ -75,15 +115,17 @@ script HudManager extends Logic
         -- 현재 소유 메소(충분 초록/부족 빨강) + 이번 라운드 상환 필요 메소. 값 변화 시에만 갱신.
         -- repayText의 FontColor는 여기서 건드리지 않는다 — 임박 깜빡임은 UpdateWarningFX가 단독 관리.
         local meso = _GameManager.Meso
-        -- 실효 상환금 PendingRepayment(위험거래 이자·대출 페널티 반영) 우선, 미보류 시 다음 단계 원본가 폴백.
-        local required = (_GameManager.PendingRepayment > 0) and _GameManager.PendingRepayment or _BlacksmithConfig:GetDebtAmount(_GameManager.DebtStage + 1)
-        local key = tostring(meso) .. "|" .. tostring(required)
+        -- 상환 필요 메소 = 서버 SSOT(GetCurrentRepayment): 미납 시 실효 상환금, 아니면 다음 단계 미리보기.
+        local required = _GameManager:GetCurrentRepayment()
+        -- 다음 라운드로 넘어가려면 '상환 필요 메소 + 대출 빚'을 전부 갚아야 하므로 충분/부족 판정은 둘의 합 기준.
+        local needTotal = required + _GameManager.Debt
+        local key = tostring(meso) .. "|" .. tostring(required) .. "|" .. tostring(_GameManager.Debt)
         if key == self.lastHudKey then return end
         self.lastHudKey = key
 
         if isvalid(self.mesoText) then
             self.mesoText.Text = "현재 소유 메소: " .. self:Comma(meso)
-            if meso >= required then
+            if meso >= needTotal then
                 self.mesoText.FontColor = Color(0.3, 0.85, 0.3, 1)   -- 충분 → 초록
             else
                 self.mesoText.FontColor = Color(1, 0.3, 0.3, 1)      -- 부족 → 빨강
@@ -129,10 +171,10 @@ script HudManager extends Logic
                 if isvalid(self.timerLabelCanvas) then
                     self.timerLabelCanvas.GroupAlpha = blinkOn and 1.0 or 0.1
                 end
-                -- (c) 메소 부족 시 상환필요메소 빨강↔골드
+                -- (c) 메소 부족 시 상환필요메소 빨강↔골드 (상환 필요 메소 + 대출 빚 합계 기준)
                 if isvalid(self.repayText) then
-                    local required = (_GameManager.PendingRepayment > 0) and _GameManager.PendingRepayment or _BlacksmithConfig:GetDebtAmount(_GameManager.DebtStage + 1)
-                    if _GameManager.Meso < required and blinkOn then
+                    local required = _GameManager:GetCurrentRepayment()
+                    if _GameManager.Meso < (required + _GameManager.Debt) and blinkOn then
                         self.repayText.FontColor = Color(1, 0.2, 0.2, 1)
                     else
                         self.repayText.FontColor = goldColor
@@ -153,6 +195,109 @@ script HudManager extends Logic
             if isvalid(self.timerLabel) then self.timerLabel.FontColor = Color(1, 1, 1, 1) end
             if isvalid(self.timerLabelCanvas) then self.timerLabelCanvas.GroupAlpha = 1.0 end
             if isvalid(self.repayText) then self.repayText.FontColor = goldColor end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateDebt()
+        -- 대출로 누적된 '현재 빚' 표시. 빚이 0이면 박스를 숨긴다.
+        local debt = _GameManager.Debt
+        if isvalid(self.debtBox) then self.debtBox.Enable = debt > 0 end
+        if isvalid(self.debtText) then
+            self.debtText.Text = "현재 빚 : " .. self:Comma(debt)
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateLoanPopup(number delta)
+        -- 대출 유도 팝업을 상단 박스 뒤에서 스르륵 내리고(등장) 올린다(퇴장).
+        -- 목표 y: 빚 있으면 DebtBox 아래(-252), 없으면 RepayBox 아래(-168). 숨김 y = 목표 y + 84.
+        if not isvalid(self.loanPopup) then return end
+        local debt = _GameManager.Debt
+        local targetY = (debt > 0) and (-2 * self.popupSlotH - self.popupSlotH) or (-2 * self.popupSlotH)  -- -252 / -168
+        local hiddenY = targetY + self.popupSlotH
+        local shown = self:WantLoanPopup()
+        local ui = self.loanPopup.UITransformComponent
+        local cg = self.loanPopup.CanvasGroupComponent
+
+        if not shown and not self.loanPopupActive then
+            -- 완전 숨김 유지: 애니메이션 없이 hiddenY로 스냅(빚 변화로 hiddenY가 바뀌어도 조용히 따라감).
+            self.popupY = hiddenY
+            self.loanPopup.Enable = false
+            return
+        end
+
+        -- 활성(등장/체류/퇴장 중): 목표를 향해 선형 이동.
+        self.loanPopupActive = true
+        self.loanPopup.Enable = true
+        local goalY = shown and targetY or hiddenY
+        local dy = goalY - self.popupY
+        local step = self.popupSpeed * delta
+        if math.abs(dy) <= step then
+            self.popupY = goalY
+        elseif dy > 0 then
+            self.popupY = self.popupY + step
+        else
+            self.popupY = self.popupY - step
+        end
+        if isvalid(ui) then ui.anchoredPosition = Vector2(0, self.popupY) end
+
+        -- 클릭은 완전히 내려온 상태(도착)에서만 허용. 슬라이드 중/퇴장 중엔 막는다.
+        local arrived = shown and (math.abs(self.popupY - targetY) < 0.5)
+        if isvalid(cg) then cg.Interactable = arrived end
+
+        -- 퇴장 완료 → 비활성화(다음 프레임부터 스냅 경로).
+        if (not shown) and (math.abs(self.popupY - hiddenY) < 0.5) then
+            self.loanPopupActive = false
+            self.loanPopup.Enable = false
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method boolean WantLoanPopup()
+        -- 대출 유도 팝업을 띄울 상황인가:
+        --   스크래치 화면(아이템 보유) → 이상한 큐브 살 돈이 모자람.
+        --   상점 화면(ActiveScreen=="shop", 미보유) → 상점 무기 3슬롯을 전부 살 수 없음.
+        --   재정 관리 화면/게임오버에서는 띄우지 않는다.
+        if _GameManager.IsGameOver then return false end
+        local screen = isvalid(_LobbyManager) and _LobbyManager.ActiveScreen or "lobby"
+        if screen == "finance" then return false end
+        if _GameManager.CurrentItemId ~= "" then
+            local weird = _BlacksmithConfig:GetCube("weird")
+            local cost = (weird ~= nil) and weird.cost or 0
+            return _GameManager.Meso < cost
+        elseif screen == "shop" then
+            return self:AllShopUnaffordable()
+        end
+        return false
+    end
+
+    @ExecSpace("ClientOnly")
+    method boolean AllShopUnaffordable()
+        -- 상점 슬롯 CSV(ShopSlotsData)를 파싱해 3슬롯 실효 구매가가 전부 보유 메소를 초과하는지 판정.
+        --   하나라도 살 수 있으면 false. 슬롯이 아예 없으면 false(판정 불가).
+        local data = _GameManager.ShopSlotsData
+        if data == nil or data == "" then return false end
+        local meso = _GameManager.Meso
+        local any = false
+        for token in string.gmatch(data, "([^,]+)") do
+            any = true
+            local gradeKey = string.match(token, ":([^:]+)")
+            local g = (gradeKey ~= nil) and _BlacksmithConfig:GetWeaponGrade(gradeKey) or nil
+            if g ~= nil then
+                local cost = _GameManager:GetEffectiveBuyCost(g.buyCost)
+                if meso >= cost then return false end
+            end
+        end
+        return any
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnLoanPopupClicked()
+        -- 팝업 클릭 → 재정 관리 페이지 진입(FinanceManager가 화면 전환·팝업 퇴장 처리).
+        log("[HudManager] loan popup clicked -> open finance")
+        if isvalid(_FinanceManager) then
+            _FinanceManager:Open()
         end
     end
 

@@ -60,8 +60,9 @@ script GameManager extends Logic
     -- ── 재정 관리: 메소 대출 (finance_management.md) ──
     @Sync property integer LoanUseCount = 0      -- 사용한 대출 횟수
     @Sync property boolean CanLoan = false       -- 현재 대출 가능 여부(서버 판정, HUD/버튼 게이팅용)
-    -- 다음 상환금에 곱해질 대출 패널티 배수(1=없음, 2=대출로 2배 예정). 상환 시 소비 후 1로 복귀.
-    property integer LoanPenaltyPending = 1
+    -- 대출로 누적된 갚아야 할 빚. 대출 1회당 원금×repayMultiplier(=원금의 2배) 증가.
+    --   상환 시점(5/5)에 '상환 필요 메소 + 이 빚'을 전부 갚아야 다음 라운드로 진행한다. HUD '현재 빚' 별도 표시.
+    @Sync property integer Debt = 0
 
     -- ── 로비 상태(전이 API) ──
     --   현재 어떤 활동에 있는지 서버 권위 상태. UI/맵이 이 값을 읽어 전환. (lobby_hub.md)
@@ -103,7 +104,7 @@ script GameManager extends Logic
         self.IsAugmentPending = false
         -- 대출 상태 리셋 (Phase 9)
         self.LoanUseCount = 0
-        self.LoanPenaltyPending = 1
+        self.Debt = 0
         self.CanLoan = false
         -- 로비 상태 리셋 (Phase 5)
         self.CurrentActivity = "lobby"
@@ -264,9 +265,8 @@ script GameManager extends Logic
         if self.CubeUseCount % d.debtCycle == 0 then
             local stage = self.CubeUseCount // d.debtCycle
             self.IsRepaymentDue = true
-            -- 위험 거래(이자 증가) + 대출 패널티(다음 상환 2배)를 반영한 실효 상환금. (Phase 8·9)
+            -- 위험 거래(이자 증가)를 반영한 실효 상환금. 대출 빚(self.Debt)은 상환 시점에 별도 합산. (Phase 8·9)
             self.PendingRepayment = self:ComputeRepayment(stage)
-            self.LoanPenaltyPending = 1  -- 대출 패널티는 이번 상환에 반영했으므로 소비
             log("[GameManager] repayment DUE: stage=" .. tostring(stage)
                 .. ", amount=" .. tostring(self.PendingRepayment))
         end
@@ -415,9 +415,11 @@ script GameManager extends Logic
             return
         end
 
-        local amount = self.PendingRepayment
+        -- 상환 필요 메소 + 대출로 누적된 빚을 전부 갚아야 다음 라운드로 진행한다(finance §, 유저 확정).
+        local amount = self.PendingRepayment + self.Debt
         if self.Meso >= amount then
             self.Meso = self.Meso - amount
+            self.Debt = 0
             self.DebtStage = self.DebtStage + 1
             self.IsRepaymentDue = false
             self.PendingRepayment = 0
@@ -429,6 +431,9 @@ script GameManager extends Logic
                 .. ", -" .. tostring(amount) .. ", meso=" .. tostring(self.Meso)
                 .. ", nextRepayIn=" .. tostring(self.CubesUntilRepayment)
                 .. ", augmentPending=" .. tostring(self.IsAugmentPending))
+            -- 다음 라운드 진입: 실제 라운드/시간 전환 시스템은 미구현 → 로그로만 알린다(유저 확정).
+            log("[GameManager] NEXT ROUND: day=" .. tostring(self:GetCurrentDay())
+                .. "일차 (라운드 전환 시스템 미구현 — 로그만)")
         else
             -- 상환 금액 부족 → 게임 오버 (flow §16) + 기록 저장 (Phase 2)
             self.IsGameOver = true
@@ -459,6 +464,14 @@ script GameManager extends Logic
     method integer GetCurrentDay()
         -- 일차 = 완료 상환 단계 + 1 (A안). 로비/HUD '현재 날짜' 표시용 계산 규약. (lobby_hub.md §4)
         return self.DebtStage + 1
+    end
+
+    method integer GetCurrentRepayment()
+        -- 현재 '상환 필요 메소' 단일 진실값(서버·클라 공용, ExecSpace 없음).
+        --   상환 미납(5/5)이면 실효 상환금 PendingRepayment, 아니면 다음 단계 원본 상환금 미리보기.
+        --   HUD 표시·대출 금액·재정 정보가 모두 이 값을 SSOT로 쓴다(드리프트 방지).
+        if self.PendingRepayment > 0 then return self.PendingRepayment end
+        return _BlacksmithConfig:GetDebtAmount(self.DebtStage + 1)
     end
 
     -- ═══════════════ 대장 기술(증강) — 상태/선택 (Phase 6·7) ═══════════════
@@ -586,10 +599,11 @@ script GameManager extends Logic
     end
 
     method integer ComputeRepayment(integer stage)
-        -- 실효 상환금 = 기본 상환금 × (1 + 위험거래 이자%) × 대출 패널티 배수. 1000단위 반올림. (Phase 8·9)
+        -- 실효 상환금 = 기본 상환금 × (1 + 위험거래 이자%). 1000단위 반올림. (Phase 8)
+        --   대출 빚(self.Debt)은 이 상환금과 별개로 상환 시점(RequestSettleDebt)에 합산한다.
         local base = _BlacksmithConfig:GetDebtAmount(stage)
         local riskPct = self:GetAugmentStageValueFor("riskyDeal")
-        local amount = base * (1 + riskPct / 100) * self.LoanPenaltyPending
+        local amount = base * (1 + riskPct / 100)
         return math.floor(amount / 1000 + 0.5) * 1000
     end
 
@@ -597,34 +611,42 @@ script GameManager extends Logic
 
     @ExecSpace("ServerOnly")
     method void UpdateCanLoan()
-        -- 대출 가능 여부 재계산: 게임오버 아님 + 사용 횟수 남음 + (무기 구매 불가 & 큐브 사용 불가). (finance §2)
-        --   무기 구매 불가 = 현재 상점 최저 실효 구매가도 못 냄. 큐브 사용 불가 = 이상한 큐브 비용도 못 냄.
-        --   ※ 보유 아이템 판매로 메소를 얻는 탈출로는 조건에 넣지 않음(기획서 §2 문구 기준) — UI에서 안내 예정.
+        -- 대출 가능 여부 재계산: 게임오버 아님 + 사용 횟수 남음 + '다음 행동이 막힘'. (finance §2)
+        --   현재 화면 상황(아이템 보유 여부)에 따라 '막힘'을 판정해 HUD 대출 유도 팝업 조건과 정합화한다.
+        --     · 아이템 미보유(상점 화면): 상점 무기를 하나도 살 수 없음 = 막힘.
+        --     · 아이템 보유(스크래치 화면): 이상한 큐브를 살 수 없음 = 막힘(판매 탈출은 조건에서 제외, §2 문구).
+        --   (아이템이 없으면 큐브를 쓸 대상 자체가 없으므로 큐브 비용은 무기 구매 불가만으로 판정한다.)
         local loan = _BlacksmithConfig:GetLoanConfig()
         if self.IsGameOver or self.LoanUseCount >= loan.maxUses then
             self.CanLoan = false
             return
         end
-        local minBuy = -1
-        if self.ShopSlots ~= nil then
-            for _, slot in ipairs(self.ShopSlots) do
-                local g = _BlacksmithConfig:GetWeaponGrade(slot.grade)
-                if g ~= nil then
-                    local c = self:GetEffectiveBuyCost(g.buyCost)
-                    if minBuy < 0 or c < minBuy then minBuy = c end
+        local stuck
+        if self.CurrentItemId ~= "" then
+            local weird = _BlacksmithConfig:GetCube("weird")
+            local cubeCost = (weird ~= nil) and weird.cost or 0
+            stuck = self.Meso < cubeCost
+        else
+            local minBuy = -1
+            if self.ShopSlots ~= nil then
+                for _, slot in ipairs(self.ShopSlots) do
+                    local g = _BlacksmithConfig:GetWeaponGrade(slot.grade)
+                    if g ~= nil then
+                        local c = self:GetEffectiveBuyCost(g.buyCost)
+                        if minBuy < 0 or c < minBuy then minBuy = c end
+                    end
                 end
             end
+            stuck = (minBuy < 0) or (self.Meso < minBuy)
         end
-        local weird = _BlacksmithConfig:GetCube("weird")
-        local cubeCost = (weird ~= nil) and weird.cost or 0
-        local cannotBuy = (minBuy < 0) or (self.Meso < minBuy)
-        local cannotCube = self.Meso < cubeCost
-        self.CanLoan = cannotBuy and cannotCube
+        self.CanLoan = stuck
     end
 
     @ExecSpace("Server")
     method void RequestLoan()
-        -- 메소 대출: 위기 대응. 조건 충족 시 즉시 지급 + 상환금 2배 패널티 + 사용 횟수 증가. (finance §2~§4)
+        -- 메소 대출: 위기 대응. 조건 충족 시 즉시 지급 + 갚아야 할 빚 누적 + 사용 횟수 증가. (finance §2~§4)
+        --   금액 규칙(유저 확정): 지급 메소 = 현재 상환 필요 메소만큼, 빚도 그만큼 증가.
+        --   즉 상환 시점에 '상환 필요 메소 + 빚'을 한 번에 갚아야 한다(예: 상환 45,000이면 45,000 받고 빚 45,000 → 정산 90,000).
         if self.IsGameOver then
             log_warning("[GameManager] loan rejected: game over")
             return
@@ -635,19 +657,13 @@ script GameManager extends Logic
                 .. ", uses=" .. tostring(self.LoanUseCount) .. ")")
             return
         end
-        local loan = _BlacksmithConfig:GetLoanConfig()
-        self.Meso = self.Meso + loan.payout
+        local amount = self:GetCurrentRepayment()
+        self.Meso = self.Meso + amount
+        self.Debt = self.Debt + amount
         self.LoanUseCount = self.LoanUseCount + 1
-        -- 상환금 2배: 현재 상환 미납이면 즉시 2배, 아니면 다음 상환에 배수 예약. (finance §3)
-        if self.IsRepaymentDue and self.PendingRepayment > 0 then
-            self.PendingRepayment = self.PendingRepayment * loan.repayMultiplier
-        else
-            self.LoanPenaltyPending = self.LoanPenaltyPending * loan.repayMultiplier
-        end
         self:UpdateCanLoan()
-        log("[GameManager] LOAN granted: +" .. tostring(loan.payout) .. ", uses=" .. tostring(self.LoanUseCount)
-            .. ", meso=" .. tostring(self.Meso) .. ", pendingRepay=" .. tostring(self.PendingRepayment)
-            .. ", penaltyPending=" .. tostring(self.LoanPenaltyPending))
+        log("[GameManager] LOAN granted: +" .. tostring(amount) .. ", uses=" .. tostring(self.LoanUseCount)
+            .. ", meso=" .. tostring(self.Meso) .. ", debt=" .. tostring(self.Debt))
     end
 
     -- ═══════════════ 로비 상태 전이 API (Phase 5) ═══════════════

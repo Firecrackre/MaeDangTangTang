@@ -65,11 +65,13 @@
     `RequestConfirmDestroy()`(파괴 아이템 정리) / `RequestSettleDebt()`(상환·부족 시 게임오버) /
     `RequestSelectAugment(key)`(증강 3택 선택) / `RequestLoan()`(메소 대출) / `RequestRestart()`(게임오버 후 전체 초기화) /
     `EnterActivity(name)`·`ReturnToLobby()`(로비 상태 전이). UI 버튼을 여기에 연결한다.
+    (`Debt`: 대출로 누적된 갚아야 할 빚 @Sync. 대출 1회당 **현재 상환 필요 메소(`GetCurrentRepayment()`)만큼** 증가. `GetCurrentRepayment()`=상환 필요 메소 단일 진실값(미납 시 `PendingRepayment`, 아니면 `GetDebtAmount(DebtStage+1)` 미리보기) — HUD·재정·대출 공용 SSOT.)
   - `PotentialService.mlua` — 잠재 판정(`RollPotential(allowDestroy, equipId, validForceChance)` → 등급+옵션 3줄. equipId/validForceChance는 증강 '대장장이의 눈'용). `PricingCalculator.mlua` — 판매가 산정(`Calculate(equipId, pr)` → `{destroyed, price, ...}`).
   - `BlacksmithConfig.mlua` (`@Logic`) — 구현된 밸런스 상수의 SSOT. 시작메소/큐브비용/등급·옵션 확률/장비 5종/빚 상환표 + **증강 4종(`augments`)·대출(`loan`)·저축(`savings`)** 등 모든 수치는 이 파일에서만 조정한다(기획서 값을 옮긴 코드 측 SSOT).
   - **로비 허브 서버 로직(증강·재정·게임오버·재시작) — UI 없이 로직/API만** (`lobby_hub`·`blacksmith_upgrade`·`finance_management` 기획서). 세부:
     - **대장 기술(증강)**: 상환 단계 도달(`RequestSettleDebt` 성공) 시 `RollAugmentChoices`로 3택 제시(3단계 소진 증강 제외) → `RequestSelectAugment(key)`(중복 시 단계 상승, 최대 3). 효과 배선: 더좋은물품→`RollShop` 등급확률 / 대장장이의눈→`RollLine` 유효옵션 / 가격협상→`GetEffectiveBuyCost` 구매가 / 위험거래→판매가·`ComputeRepayment` 이자.
-    - **메소 대출**: `RequestLoan()` — 조건(무기+큐브 둘 다 구매불가) 충족 시 즉시 지급 + 상환금 2배(현재 미납이면 즉시, 아니면 `LoanPenaltyPending`로 다음 상환에) + **1회 제한**(`loan.maxUses`).
+    - **메소 대출**: `RequestLoan()` — 조건(`UpdateCanLoan`: 아이템 미보유면 상점 무기 전부 구매불가 / 보유면 큐브 구매불가) 충족 시 **지급 메소 = 현재 상환 필요 메소(`GetCurrentRepayment()`), 빚 `Debt += 같은 금액`** + **1회 제한**(`loan.maxUses`). 즉 상환 필요 메소만큼 받고 그만큼 빚져서, 상환 시 `상환금+빚`을 한 번에 청구(예: 상환 45,000 → 45,000 받고 빚 45,000 → 정산 90,000). ⚠ 기존 "고정 지급 100,000 / 빚 원금×2" 및 "상환금 2배(`LoanPenaltyPending`)" 방식은 모두 폐기. `d.loan`은 `maxUses`만 남김(금액은 동적).
+    - **상환+빚 청산**: `RequestSettleDebt()` — 상환 시점(5/5) 도달 시 `PendingRepayment + Debt`를 전부 갚아야 통과(부족 시 게임오버). 성공 시 `Debt=0`·`DebtStage+1`·증강 3택. 다음 라운드 전환 시스템은 미구현 → `log("NEXT ROUND: day=N일차 …")`로만 알림.
     - **게임오버 기록**: `RecordGameOver()` — 게임오버 시 5개 항목(최종메소/큐브수/판매수/최고판매가/상환단계)을 `_DataStorageService:GetGlobalDataStorage("BlacksmithRecords")` 키 `lastRun`에 저장(Credit 절약 위해 1회성).
     - **재시작**: `RequestRestart()` — 게임오버 상태에서만, `ResetSession()`으로 현재 판 전체 리셋(증강·대출·통계 포함, DataStorage 누적은 보존).
     - **일차 규약**: 별도 시간 시스템 없이 **일차 = `DebtStage + 1`**(A안). 서버 `GetCurrentDay()`, 클라는 직접 계산.
@@ -90,10 +92,17 @@
 - **상단 HUD(로비/상점/스크래치 공용) — `RootDesk/MyDesk/Hud/HudManager.mlua`(`@Logic`, 클라) + `ui/HudGroup.ui`.**
   InGameMap에서 상시 표시(맵 게이팅: `CurrentMapName=="InGameMap"`으로 `hudRoot.Enable`). 값은 전부 서버 권위 `_GameManager` @Sync.
   - 좌상단 라디얼 시계('현재 시간') = `used = CubeUseCount % 5` → **n/5(올라가는 방식**, 상환 시점 5/5). `TimerFill.FillAmount`로 채움.
-  - 우상단 메소 박스 = '현재 소유 메소: {Meso}'(충분 초록/부족 빨강) + '상환 필요 메소: {required}'(`required = PendingRepayment>0 ? PendingRepayment : GetDebtAmount(DebtStage+1)`).
-  - 임박 연출: 3/5부터 시계 흔들림, 4/5부터 중앙 라벨 빨강 깜빡 + 메소 부족 시 상환필요 텍스트 빨강↔골드(`UpdateWarningFX`).
+  - 우상단 박스(`Hud` 컨테이너, 슬롯 간격 84px): `MesoBox`(y0) '현재 소유 메소'(충분/부족 색; 충분 판정 = `Meso >= required + Debt`) → `RepayBox`(y-84) '상환 필요 메소: {required}'(`required = PendingRepayment>0 ? PendingRepayment : GetDebtAmount(DebtStage+1)`) → **`DebtBox`(y-168) '현재 빚 : {Debt}'(`Debt>0`일 때만 Enable)**.
+  - 임박 연출: 3/5부터 시계 흔들림, 4/5부터 중앙 라벨 빨강 깜빡 + 메소 부족(`required+Debt` 기준) 시 상환필요 텍스트 빨강↔골드(`UpdateWarningFX`).
+  - **대출 유도 슬라이드 팝업(`LoanPopup`, 버튼+CanvasGroup)**: 상단 박스 뒤에서 스르륵 내려오는 '대출하러 가기!' CTA. `UpdateLoanPopup`이 OnUpdate에서 목표 y(빚 없으면 -168=RepayBox 아래 / 빚 있으면 -252=DebtBox 아래)로 선형 슬라이드, 숨김 y = 목표+84(위 박스 뒤). `WantLoanPopup`: 상점 화면(`ActiveScreen=="shop"`+미보유)이면 3슬롯 전부 실효 구매가 초과 / 스크래치(아이템 보유)면 이상한 큐브 구매불가 시 표시. `ActiveScreen=="finance"`·게임오버면 숨김. 도착 전/퇴장 중 `CanvasGroup.Interactable=false`(클릭 차단). 팝업은 `OnBeginPlay`에서 `_UILogic:SetSiblingIndex(…,1)`로 박스 뒤에 배치. 클릭 → `_FinanceManager:Open()`.
   - `HudGroup`은 `GroupType=1/GroupOrder=0`(다른 화면 그룹이 위에 얹힘). in-group `@Component`가 없어 루트 `Enable` 게이팅이 안전(LobbyGroup과 동일).
   - ⚠ 과거 이 HUD가 `WeaponShopManager`·`ScratchTicketManager`·`LobbyGroup`에 3벌 중복돼 있었으나 제거·통합함(UI Layer도 단일 `HudGroup`).
+- **재정 관리(대출 서비스 센터) UI** — `RootDesk/MyDesk/Finance/FinanceManager.mlua`(`@Logic`, 클라), `ui/FinanceGroup.ui`(GroupType=1/GroupOrder=5, 최상위 모달).
+  진입: HUD 대출 유도 팝업 클릭 또는 로비 '재정 관리' 버튼(`LobbyManager.OnFinanceClicked` → `_FinanceManager:Open()`). 종료: X 버튼 / 대출 성공(자동). 화면 상태는 `LobbyManager.ActiveScreen`을 `"finance"`로 전환(+`EnterActivity("finance")` 서버 정합), 복귀 시 `prevScreen`으로 되돌림(+`ReturnToLobby()`). InGameMap+`ActiveScreen=="finance"` 게이팅으로 `financeRoot.Enable`.
+  - 보드: 노인 NPC(`thumbnail://` 런타임 설정)·말풍선·정보 3줄(지급액/늘어나는 빚/남은 횟수, 돈주머니 아이콘)·초록 '대출하기' 버튼. 지급액·빚은 `GetCurrentRepayment()`에 동적 연동(`RefreshInfo` 매 프레임 갱신).
+  - '대출하기' → 경고 확인 팝업(`ConfirmPopup`, **'대출받기'(→`RequestLoan`) + '취소'(→`OnCancelConfirm`, 팝업만 닫음)**) → 대출 성공(`LoanUseCount` 증가) 감지 시 `OnUpdate`가 자동 `Close()`.
+  - **잠금 오버레이(`LockOverlay`)**: `LoanUseCount >= maxUses`면 대출하기 버튼 위를 반투명+자물쇠로 덮고, 그 위 투명 `LockBtn`이 클릭을 가로챔 → 보드 흔들림(`shakeTime`) + 에러음(`_SoundService:PlaySound(errorSoundRUID)`), 대출 실행 안 함(소진+돈부족 = soft lock, 추후 게임오버 연결 예정).
+  - 사운드: 클릭 `972843e759204d3e9ad84e7d3fa94f83` / 에러 `174d501eccd04eadbd6c6411d4ade7e7`(msw-search UI 오류음).
 
 ## 검증된 gotcha (이 프로젝트에서 실제로 디버깅함)
 - **UI 히트테스트 좌표공간이 두 개다.** `UITransformComponent:GetWorldCorners()`는 **UI-캔버스 월드**(수백 단위)를
