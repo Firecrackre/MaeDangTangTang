@@ -398,15 +398,14 @@ script GameManager extends Logic
             log_warning("[GameManager] sell rejected: item destroyed")
             return
         end
-        -- 큐브 사용 여부에 따라 판매가를 서버가 권위 결정(클라 입력 불신):
-        --   사용함 → 계산된 예상 판매가(CurrentPrice).
-        --   미사용 → 기본 판매가(CurrentBasePrice)만 — 배수/보너스 없이. (데드락 탈출용 기본가 판매)
-        local gain
-        if self.HasPotential then
-            gain = self.CurrentPrice
-        else
-            gain = self.CurrentBasePrice
+        -- 큐브 미사용 상태(잠재 없음)에서는 판매 불가(서버 권위 방어 — 클라 버튼 비활성화와 정합).
+        --   큐브를 한 번이라도 써야 판매 가능. 기본가 판매(데드락 탈출)는 폐지 → 스턱은 게임오버로 처리.
+        if not self.HasPotential then
+            log_warning("[GameManager] sell rejected: no cube used (potential required)")
+            return
         end
+        -- 판매가는 서버가 권위 결정한 예상 판매가(CurrentPrice).
+        local gain = self.CurrentPrice
         local soldId = self.CurrentItemId
         self.Meso = self.Meso + gain
         -- 판매 통계 갱신(게임오버 기록용, Phase 1).
@@ -575,7 +574,8 @@ script GameManager extends Logic
             local weird = _BlacksmithConfig:GetCube("weird")
             local cubeCost = (weird ~= nil) and weird.cost or 0
             if self.Meso < cubeCost then
-                local sellGain = self.HasPotential and self.CurrentPrice or self.CurrentBasePrice
+                -- 큐브 미사용(잠재 없음)이면 판매 불가 → 판매로 회생 불가(회생가 0). (기본가 판매 폐지)
+                local sellGain = self.HasPotential and self.CurrentPrice or 0
                 local minBuy = -1
                 if self.ShopSlots ~= nil then
                     for _, slot in ipairs(self.ShopSlots) do

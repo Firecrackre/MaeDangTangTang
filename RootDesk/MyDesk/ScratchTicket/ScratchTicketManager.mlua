@@ -335,8 +335,8 @@ script ScratchTicketManager extends Component
         if isvalid(self.ticket3) then self.ticket3.Enable = false end
         if isvalid(self.priceWindow) then self.priceWindow.Enable = false end
         self:SetButtonEnabled(self.reuseButton, false)
-        -- 큐브 미사용 대기 상태에서도 판매 가능(기본가 판매 → 데드락 탈출). 클릭 시 확인 팝업.
-        self:SetButtonEnabled(self.sellButton, true)
+        -- 큐브 사용 전에는 판매 불가(재사용 버튼과 함께 비활성화). 판매는 큐브 사용 후 3줄 공개(OnAllRevealed) 시에만 활성.
+        self:SetButtonEnabled(self.sellButton, false)
         self.revealedCount = 0
         self.rainbowLines = {}
         self.destroyPending = false
@@ -732,13 +732,14 @@ script ScratchTicketManager extends Component
 
     @ExecSpace("ClientOnly")
     method void OnSellClicked()
-        -- 판매 클릭: 큐브를 한 번이라도 썼으면 바로 판매, 안 썼으면 확인 팝업(기본가 판매 경고).
-        if _GameManager.HasPotential then
-            log("[ScratchTicket] request sell (with potential)")
-            _GameManager:RequestSellItem()
-        else
-            self:ShowConfirmSell()
+        -- 판매 클릭: 판매 버튼은 큐브 사용 후(잠재 보유, OnAllRevealed)에만 활성화되므로 바로 판매 요청.
+        -- 큐브 미사용 판매(기본가/확인 팝업)는 폐지 — 대기 상태에선 버튼이 비활성이라 도달하지 않는다.
+        if not _GameManager.HasPotential then
+            log("[ScratchTicket] sell ignored: no cube used (button should be disabled)")
+            return
         end
+        log("[ScratchTicket] request sell (with potential)")
+        _GameManager:RequestSellItem()
     end
 
     @ExecSpace("ClientOnly")
