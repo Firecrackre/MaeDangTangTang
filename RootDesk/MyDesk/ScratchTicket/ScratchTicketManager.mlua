@@ -87,6 +87,9 @@ script ScratchTicketManager extends Component
     property number destroyTimer = 0
     property number boardBaseX = 0
 
+    -- 5/5(상환 미납) 도달 시 큐브 재사용·구매 잠금 상태 추적(레벨 구동 변화 감지)
+    property boolean lastRepayDue = false
+
     property any clickRecords = nil      -- {entity, eventHandler} list for cube/buy/reuse/sell buttons
     property any enterRecords = nil      -- hover enter/exit handler records
 
@@ -283,9 +286,18 @@ script ScratchTicketManager extends Component
                 -- 활성 진입 시 현재 서버 상태 기준으로 재평가(다음 폴링이 처리하도록 sentinel).
                 self.lastPotentialData = "\0"
                 self.destroyPending = false
+                self.lastRepayDue = _GameManager.IsRepaymentDue
+                self:RefreshCubeLock()
             end
         end
         if not active then return end
+
+        -- 5/5(상환 미납) 상태 변화 감지 → 큐브 재사용·구매 버튼 잠금/해제 (팔기만 가능).
+        -- IsRepaymentDue는 5번째 큐브 RPC 후 @Sync로 뒤늦게 켜지므로 레벨 구동으로 폴링한다.
+        if _GameManager.IsRepaymentDue ~= self.lastRepayDue then
+            self.lastRepayDue = _GameManager.IsRepaymentDue
+            self:RefreshCubeLock()
+        end
 
         -- 잠재 데이터 변화 감지 → 대기/스크래치 세팅 전환.
         local pdata = _GameManager.CurrentPotentialData
@@ -584,9 +596,11 @@ script ScratchTicketManager extends Component
         if isvalid(self.priceText) then
             self.priceText.Text = self:Comma(_GameManager.CurrentPrice) .. " 메소"
         end
-        self:SetButtonEnabled(self.reuseButton, true)
+        -- 5/5(상환 미납) 도달 시 재사용 금지 — 팔기만 가능. (다음주 정산 흐름)
+        self:SetButtonEnabled(self.reuseButton, not _GameManager.IsRepaymentDue)
         self:SetButtonEnabled(self.sellButton, true)
-        log("[ScratchTicket] all revealed -> price=" .. tostring(_GameManager.CurrentPrice))
+        log("[ScratchTicket] all revealed -> price=" .. tostring(_GameManager.CurrentPrice)
+            .. ", repayDue=" .. tostring(_GameManager.IsRepaymentDue))
     end
 
     @ExecSpace("ClientOnly")
@@ -613,8 +627,9 @@ script ScratchTicketManager extends Component
         -- 큐브 아이콘 호버 시 살짝 확대 + Z회전 진동(부들부들). 해제 시 원복.
         self.hoverTime = self.hoverTime + delta
         local wob = math.sin(self.hoverTime * 40) * 4   -- degrees
-        self:ApplyHover(self.cubeIconWeird, self.hoverWeird, wob)
-        self:ApplyHover(self.cubeIconMaster, self.hoverMaster, wob)
+        local locked = _GameManager.IsRepaymentDue   -- 잠금 중엔 호버 연출도 끔(비활성 시각과 일치)
+        self:ApplyHover(self.cubeIconWeird, self.hoverWeird and not locked, wob)
+        self:ApplyHover(self.cubeIconMaster, self.hoverMaster and not locked, wob)
     end
 
     @ExecSpace("ClientOnly")
@@ -669,6 +684,21 @@ script ScratchTicketManager extends Component
     end
 
     @ExecSpace("ClientOnly")
+    method void RefreshCubeLock()
+        -- 5/5(상환 미납) 잠금 적용: 큐브 선택 4개(아이콘+구매 버튼) 비활성 + 재사용 비활성.
+        -- 해제 시 큐브 버튼만 복원(재사용은 공개 완료 시점에 OnAllRevealed가 결정).
+        local locked = _GameManager.IsRepaymentDue
+        self:SetButtonEnabled(self.cubeIconWeird, not locked)
+        self:SetButtonEnabled(self.cubeIconMaster, not locked)
+        self:SetButtonEnabled(self.weirdBuyButton, not locked)
+        self:SetButtonEnabled(self.masterBuyButton, not locked)
+        if locked then
+            self:SetButtonEnabled(self.reuseButton, false)
+            log("[ScratchTicket] 5/5 repayment due -> cube buttons locked (sell only)")
+        end
+    end
+
+    @ExecSpace("ClientOnly")
     method void OnUseWeird()
         -- 이상한 큐브 사용 요청.
         self:UseCube("weird")
@@ -689,6 +719,11 @@ script ScratchTicketManager extends Component
     @ExecSpace("ClientOnly")
     method void UseCube(string cubeType)
         -- 서버에 큐브 사용 요청(서버가 비용/파괴/판정 확정). 결과는 @Sync로 내려와 SetupScratch가 처리.
+        -- 5/5(상환 미납) 상태면 클라에서도 차단(서버도 거부하지만 UX상 즉시 차단).
+        if _GameManager.IsRepaymentDue then
+            log("[ScratchTicket] cube blocked: repayment due (sell only)")
+            return
+        end
         self.lastCubeType = cubeType
         log("[ScratchTicket] request use cube: " .. cubeType)
         _GameManager:RequestUseCube(cubeType)

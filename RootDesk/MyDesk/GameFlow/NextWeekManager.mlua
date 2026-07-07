@@ -1,0 +1,291 @@
+@Logic
+script NextWeekManager extends Logic
+    -- 다음주 정산 팝업(클라 연출 전용). 5/5 도달 후 무기 판매/파괴로 로비에 복귀하면 열리고,
+    -- RequestSettleDebt(서버 권위)를 호출한 뒤 결과를 @Sync로 받아 숫자 스크롤 연출로 보여준다.
+    -- 성공: 메소 차감 스크롤 → (빚 있으면) 빚 0으로 스크롤+페이드아웃 → 상환액 다음주 금액으로 상승 → 닫힘.
+    -- 실패: 메소 0으로 스크롤 → 상환액(또는 빚) 2초 깜빡 → 게임오버 UI(_GameOverManager).
+    -- 승리(IsVictory): 연출 후 닫고 VictoryManager가 이어받는다. (finance_management.md 정산 팝업 흐름)
+
+    property string TargetMapName = "InGameMap"
+
+    -- ===== Bound entities (UUID는 UIBuilder가 주입) =====
+    property Entity nextWeekRoot = "76aaf176-5414-4f80-aaf0-fa8b05f08e9e"
+    property Entity boxRoot = "84886178-8aaf-45e1-b970-eb1459321391"
+    property TextComponent titleText = "194ba1e9-a1d9-4cc1-a452-aa80880510d7"
+    property TextComponent mesoValueText = "82cc86b4-bc06-4c27-b30d-e2f91d10842a"
+    property Entity repayRow = "a7fd653f-c3ff-46c8-9ee1-0e58a69ea15c"
+    property TextComponent repayValueText = "88ee8ae4-ae87-4b7c-b131-8ca7cb797751"
+    property Entity debtRow = "cb9424e8-bd97-4e9f-b13e-d87447cabbe1"
+    property TextComponent debtValueText = "d6e83823-6e30-4a98-b8b1-e68ced0427cc"
+    property TextComponent statusText = "975ba86e-c509-4298-91db-77420c9c45d7"
+
+    -- ===== Tunable =====
+    property number openDelay = 1.0        -- 팝업 표시 후 차감 시작까지 대기(초)
+    property number mesoScrollTime = 1.2   -- 메소 숫자 스크롤 시간
+    property number debtScrollTime = 0.8   -- 빚 숫자 스크롤 시간
+    property number debtFadeTime = 0.5     -- 빚 줄 페이드아웃 시간
+    property number raiseTime = 0.8        -- 상환액 상승 스크롤 시간
+    property number blinkDuration = 2.0    -- 실패 시 깜빡임 시간(유저 확정: 2초)
+    property number closeDelay = 0.8       -- 상승 후 닫히기까지 대기
+
+    -- ===== Runtime state =====
+    property string phase = "idle"   -- idle/opening/waiting/mesoScroll/debtScroll/debtFade/raise/closing/blink/gameover
+    property number timer = 0
+    property boolean openedLatch = false   -- 실패 시 IsRepaymentDue가 true로 남아도 재오픈 방지
+    property integer snapMeso = 0
+    property integer snapRepay = 0
+    property integer snapDebt = 0
+    property integer animFrom = 0
+    property integer animTo = 0
+    property string blinkTarget = ""       -- "repay" / "debt"
+    property boolean settleFailed = false
+
+    @ExecSpace("ClientOnly")
+    method void OnBeginPlay()
+        -- 시작은 숨김(맵 게이팅 gotcha: 명시적으로 끈다).
+        if isvalid(self.nextWeekRoot) then self.nextWeekRoot.Enable = false end
+        log("[NextWeek] OnBeginPlay")
+    end
+
+    method boolean IsBusy()
+        -- 정산 연출 진행 중 여부(게임오버/승리 UI가 연출을 기다릴 때 사용). ExecSpace 없음 — 클라 로컬 판정.
+        return self.phase ~= "idle" and self.phase ~= "gameover"
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnUpdate(number delta)
+        -- 오픈 조건 감시 + 정산 연출 상태머신 진행.
+        local lp = _UserService.LocalPlayer
+        local onMap = isvalid(lp) and lp.CurrentMapName == self.TargetMapName
+
+        -- 래치 해제: 상환 미납이 풀리면(정산 성공/재시작) 다음 사이클을 위해 초기화.
+        if not _GameManager.IsRepaymentDue and self.phase == "idle" then
+            self.openedLatch = false
+        end
+        -- 재시작 감지: 게임오버 연출로 넘긴 상태에서 IsGameOver가 풀리면 리셋.
+        if self.phase == "gameover" and not _GameManager.IsGameOver then
+            self:ResetPopup()
+        end
+
+        -- 오픈: 로비 복귀(아이템 없음) + 상환 미납 + 세션 진행 중.
+        if self.phase == "idle" then
+            if onMap and _GameManager.IsRepaymentDue and _GameManager.CurrentItemId == ""
+                and not _GameManager.IsGameOver and not _GameManager.IsVictory
+                and not self.openedLatch then
+                self:OpenPopup()
+            end
+            return
+        end
+
+        if not onMap then return end
+        self.timer = self.timer + delta
+
+        if self.phase == "opening" then
+            if self.timer >= self.openDelay then
+                self.phase = "waiting"
+                self.timer = 0
+                self:SetStatus("정산 중...")
+                _GameManager:RequestSettleDebt()
+                log("[NextWeek] RequestSettleDebt sent")
+            end
+        elseif self.phase == "waiting" then
+            -- 서버 결과 폴링(@Sync). 성공 = 미납 해제 / 실패 = 게임오버.
+            if not _GameManager.IsRepaymentDue then
+                self.settleFailed = false
+                self:StartMesoScroll(_GameManager.Meso)
+                log("[NextWeek] settle SUCCESS -> meso scroll to " .. tostring(_GameManager.Meso))
+            elseif _GameManager.IsGameOver then
+                self.settleFailed = true
+                if self.snapMeso < self.snapRepay then
+                    self.blinkTarget = "repay"
+                else
+                    self.blinkTarget = "debt"
+                end
+                self:StartMesoScroll(0)
+                log("[NextWeek] settle FAILED -> blinkTarget=" .. self.blinkTarget)
+            elseif self.timer >= 2.0 then
+                -- 안전망: 응답 없음 → 닫고 원상복구(래치 유지로 재시도 방지).
+                log_warning("[NextWeek] settle timeout — closing popup")
+                self:ResetPopup()
+                self.openedLatch = true
+            end
+        elseif self.phase == "mesoScroll" then
+            local done = self:UpdateScroll(self.mesoValueText, self.mesoScrollTime, delta)
+            if done then
+                if self.settleFailed then
+                    if self.blinkTarget == "debt" then
+                        -- 상환액은 냈지만 빚은 일부만: 빚이 남은 돈만큼 줄어드는 연출.
+                        local paidToDebt = self.snapMeso - self.snapRepay
+                        if paidToDebt < 0 then paidToDebt = 0 end
+                        self:StartScroll("debtScroll", self.snapDebt, self.snapDebt - paidToDebt)
+                    else
+                        self:StartBlink()
+                    end
+                else
+                    if self.snapDebt > 0 then
+                        self:StartScroll("debtScroll", self.snapDebt, 0)
+                    else
+                        self:StartRaise()
+                    end
+                end
+            end
+        elseif self.phase == "debtScroll" then
+            local done = self:UpdateScroll(self.debtValueText, self.debtScrollTime, delta)
+            if done then
+                if self.settleFailed then
+                    self:StartBlink()
+                else
+                    self.phase = "debtFade"
+                    self.timer = 0
+                end
+            end
+        elseif self.phase == "debtFade" then
+            -- 빚을 다 갚음 → 빚 줄 페이드아웃.
+            local a = 1.0 - (self.timer / self.debtFadeTime)
+            if a < 0 then a = 0 end
+            self:SetRowAlpha(self.debtRow, a)
+            if self.timer >= self.debtFadeTime then
+                if isvalid(self.debtRow) then self.debtRow.Enable = false end
+                self:StartRaise()
+            end
+        elseif self.phase == "raise" then
+            local done = self:UpdateScroll(self.repayValueText, self.raiseTime, delta)
+            if done then
+                self.phase = "closing"
+                self.timer = 0
+                self:SetStatus(_GameManager.IsVictory and "모든 빚을 청산했습니다!" or (tostring(_GameManager:GetCurrentDay()) .. "주차가 시작됩니다"))
+            end
+        elseif self.phase == "closing" then
+            if self.timer >= self.closeDelay then
+                self:ResetPopup()
+                log("[NextWeek] closed. week=" .. tostring(_GameManager:GetCurrentDay())
+                    .. ", victory=" .. tostring(_GameManager.IsVictory))
+            end
+        elseif self.phase == "blink" then
+            -- 실패한 항목(상환액/빚) 깜빡임 → 2초 후 게임오버 UI로 전달.
+            local row = (self.blinkTarget == "repay") and self.repayRow or self.debtRow
+            local blinkOn = (math.floor(self.timer / 0.3) % 2) == 0
+            self:SetRowAlpha(row, blinkOn and 1.0 or 0.15)
+            if self.timer >= self.blinkDuration then
+                self:SetRowAlpha(row, 1.0)
+                self.phase = "gameover"
+                self.timer = 0
+                _GameOverManager:Show(_GameManager.GameOverReason)
+                log("[NextWeek] blink done -> game over UI (" .. _GameManager.GameOverReason .. ")")
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OpenPopup()
+        -- 팝업 오픈: 스냅샷 + 화면을 로비로 강제(판매 직후 상점 보드 노출 방지) + 초기 표시.
+        self.openedLatch = true
+        self.phase = "opening"
+        self.timer = 0
+        self.settleFailed = false
+        self.blinkTarget = ""
+        self.snapMeso = _GameManager.Meso
+        self.snapRepay = _GameManager.PendingRepayment
+        self.snapDebt = _GameManager.Debt
+        if isvalid(_LobbyManager) then _LobbyManager.ActiveScreen = "lobby" end
+        _GameManager:ReturnToLobby()
+
+        if isvalid(self.titleText) then
+            self.titleText.Text = tostring(_GameManager:GetCurrentDay()) .. "주차 정산"
+        end
+        if isvalid(self.mesoValueText) then self.mesoValueText.Text = self:Comma(self.snapMeso) .. " 메소" end
+        if isvalid(self.repayValueText) then self.repayValueText.Text = self:Comma(self.snapRepay) .. " 메소" end
+        if isvalid(self.repayRow) then self.repayRow.Enable = true end
+        self:SetRowAlpha(self.repayRow, 1.0)
+        if isvalid(self.debtRow) then
+            self.debtRow.Enable = self.snapDebt > 0
+            self:SetRowAlpha(self.debtRow, 1.0)
+        end
+        if isvalid(self.debtValueText) then self.debtValueText.Text = self:Comma(self.snapDebt) .. " 메소" end
+        self:SetStatus("이번 주 상환금을 정산합니다")
+        if isvalid(self.nextWeekRoot) then self.nextWeekRoot.Enable = true end
+        log("[NextWeek] OPEN: meso=" .. tostring(self.snapMeso) .. ", repay=" .. tostring(self.snapRepay)
+            .. ", debt=" .. tostring(self.snapDebt))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StartMesoScroll(integer target)
+        -- 메소 숫자 스크롤 시작(스냅샷 → 목표).
+        self:StartScroll("mesoScroll", self.snapMeso, target)
+        self:SetStatus("상환금 차감 중...")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StartScroll(string nextPhase, integer fromVal, integer toVal)
+        -- 숫자 스크롤 공용 시작.
+        self.phase = nextPhase
+        self.timer = 0
+        self.animFrom = fromVal
+        self.animTo = toVal
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StartRaise()
+        -- 상환액이 다음 주 금액으로 좌라락 올라가는 연출.
+        local nextRepay = _GameManager:GetCurrentRepayment()
+        if _GameManager.IsVictory then nextRepay = 0 end  -- 승리면 더 갚을 것 없음 → 0으로.
+        self:StartScroll("raise", self.snapRepay, nextRepay)
+        self:SetStatus("다음 주 상환액이 갱신됩니다")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StartBlink()
+        -- 실패 항목 깜빡임 시작.
+        self.phase = "blink"
+        self.timer = 0
+        self:SetStatus(self.blinkTarget == "repay" and "상환액이 부족합니다!" or "빚을 갚을 수 없습니다!")
+    end
+
+    @ExecSpace("ClientOnly")
+    method boolean UpdateScroll(TextComponent target, number duration, number delta)
+        -- 숫자 스크롤 프레임 갱신(ease-out). 완료 시 true.
+        local t = self.timer / duration
+        if t > 1 then t = 1 end
+        local eased = 1 - (1 - t) * (1 - t) * (1 - t)
+        local v = math.floor(self.animFrom + (self.animTo - self.animFrom) * eased + 0.5)
+        if isvalid(target) then target.Text = self:Comma(v) .. " 메소" end
+        return t >= 1
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SetRowAlpha(Entity row, number a)
+        -- 행(CanvasGroup) 알파 설정.
+        if not isvalid(row) then return end
+        local cg = row.CanvasGroupComponent
+        if isvalid(cg) then cg.GroupAlpha = a end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SetStatus(string msg)
+        -- 하단 안내 문구.
+        if isvalid(self.statusText) then self.statusText.Text = msg end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ResetPopup()
+        -- 팝업 숨김 + 상태 초기화.
+        self.phase = "idle"
+        self.timer = 0
+        if isvalid(self.nextWeekRoot) then self.nextWeekRoot.Enable = false end
+    end
+
+    method string Comma(integer n)
+        -- 천 단위 콤마.
+        local sg = ""
+        if n < 0 then sg = "-" n = -n end
+        local s = tostring(n)
+        local out = ""
+        local cnt = 0
+        for i = #s, 1, -1 do
+            out = string.sub(s, i, i) .. out
+            cnt = cnt + 1
+            if cnt % 3 == 0 and i > 1 then out = "," .. out end
+        end
+        return sg .. out
+    end
+end

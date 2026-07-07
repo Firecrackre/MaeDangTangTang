@@ -39,6 +39,8 @@ script HudManager extends Logic
     property number popupY = -84            -- 현재 팝업 y(초기 = 빚 없을 때 숨김 위치)
     property boolean loanPopupActive = false -- 등장/체류/퇴장 애니메이션 진행 중 여부
     property any loanPopupHandler = nil
+    -- 게임오버(weapon/cube) 사슬 연출 동안 팝업 강제 표시(GameOverManager:SetForceLoanPopup).
+    property boolean forceLoanPopup = false
 
     @ExecSpace("ClientOnly")
     method void OnBeginPlay()
@@ -254,12 +256,19 @@ script HudManager extends Logic
     end
 
     @ExecSpace("ClientOnly")
+    method void SetForceLoanPopup(boolean force)
+        -- 게임오버 사슬 연출용: IsGameOver 상태에서도 대출 팝업을 강제로 유지/해제(GameOverManager가 호출).
+        self.forceLoanPopup = force
+    end
+
+    @ExecSpace("ClientOnly")
     method boolean WantLoanPopup()
         -- 대출 유도 팝업을 띄울 상황인가:
         --   스크래치 화면(아이템 보유) → 이상한 큐브 살 돈이 모자람.
         --   상점 화면(ActiveScreen=="shop", 미보유) → 상점 무기 3슬롯을 전부 살 수 없음.
-        --   재정 관리 화면/게임오버에서는 띄우지 않는다.
-        if _GameManager.IsGameOver then return false end
+        --   재정 관리 화면에서는 띄우지 않는다.
+        --   게임오버 시에는 사슬 연출(weapon/cube) 동안만 강제 표시(forceLoanPopup).
+        if _GameManager.IsGameOver then return self.forceLoanPopup end
         local screen = isvalid(_LobbyManager) and _LobbyManager.ActiveScreen or "lobby"
         if screen == "finance" then return false end
         if _GameManager.CurrentItemId ~= "" then

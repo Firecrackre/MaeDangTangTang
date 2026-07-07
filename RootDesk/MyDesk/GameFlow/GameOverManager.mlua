@@ -1,0 +1,286 @@
+@Logic
+script GameOverManager extends Logic
+    -- 게임오버 UI(클라 연출 전용). 모든 화면 위(GroupOrder 60)에 덮인다.
+    -- 박스는 하늘에서 떨어져 바닥에서 통통 튀는 낙하+바운스 연출로 등장한다.
+    -- 원인별 진입 경로:
+    --   repayment/debt → NextWeekManager가 깜빡임 연출 후 Show(reason) 호출.
+    --   weapon/cube    → IsGameOver 상승 에지 자동 감지 → 대출 팝업 강제 표시 →
+    --                    팝업 위 X사슬 낙하 + 자물쇠 낙하(철컹) → 박스 낙하.
+    --   ⚠ 사슬/자물쇠(LockOverlay)는 HudGroup의 LoanPopup **자식**이다(GameOverGroup 아님) —
+    --     팝업과 동일 크기(320x74)로 팝업 위에 X자로 걸치고, 슬라이드 위치를 자동 상속한다.
+    -- 재시작 버튼 → RequestRestart(서버) → IsGameOver 하강 에지에 자체 리셋.
+
+    property string TargetMapName = "InGameMap"
+
+    -- ===== Bound entities (UUID는 UIBuilder가 주입) =====
+    property Entity gameOverRoot = "76b64998-6385-4dac-ad9b-6afbb1ac1ccc"
+    property Entity boxRoot = "d52c8c8d-fcdd-4b9e-9eb9-5a2a2b694d21"
+    property TextComponent mesoValueText = "38c9244d-4999-4c2f-a76f-50e4c1722a16"
+    property TextComponent cubeValueText = "eb255fbe-24c0-4910-b781-c59225815447"
+    property TextComponent reasonText = "f1a0265e-028a-4589-921e-306b5d04cf7c"
+    property Entity restartButton = "0445ab13-f6d6-4bab-a146-547e4133dcfd"
+    property Entity chainOverlay = "863a934b-5bab-458a-b8b5-4c1095c0b0d8"
+    property Entity chainA = "cea22496-98c6-4e05-8af0-30c6d7ad96c5"
+    property Entity chainB = "b57c8f96-5810-4ea6-a6fb-08c39a1a1f32"
+    property Entity padlock = "ec62f02e-b533-40f4-a0cb-0e10634fa45f"
+
+    -- ===== Tunable =====
+    property number boxStartY = 1300       -- 낙하 시작 y(화면 위 바깥)
+    property number boxGravity = 4200      -- 낙하 가속(px/s^2)
+    property number boxRestitution = 0.45  -- 바운스 반발 계수
+    property number boxSettleSpeed = 60    -- 이 속도 이하로 튀면 정지
+    property number chainSlideTime = 0.35  -- 사슬 낙하 시간
+    property number chainStartY = 250      -- 사슬 낙하 시작 y 오프셋(팝업 기준)
+    property number popupWaitTime = 1.0    -- 대출 팝업 슬라이드 인 대기
+    property number padlockStartY = 180    -- 자물쇠 낙하 시작 y 오프셋(팝업 기준)
+    property number padlockGravity = 2200  -- 자물쇠 낙하 가속(px/s^2)
+    property number padlockRestitution = 0.3 -- 자물쇠 착지 바운스 반발
+    property number padlockSettleSpeed = 80  -- 이 속도 이하로 튀면 정지
+    property number lockHoldTime = 0.7     -- 자물쇠 후 박스 낙하까지 대기
+    property string clankHeavyRUID = "8f610e071e87408a8326e849a88d0613"  -- 무거운 금속 잠금(msw-search)
+    property string clankShortRUID = "ab731794c2e14e399b475767edd5c407"  -- 짧은 금속 잠금(msw-search)
+    property string clickSoundRUID = "972843e759204d3e9ad84e7d3fa94f83"  -- 공용 클릭음(프로젝트)
+    property number sfxVolume = 1.0
+
+    -- ===== Runtime state =====
+    property string phase = "idle"  -- idle/popupWait/chainDrop/padlockDrop/lockHold/boxDrop/shown
+    property number timer = 0
+    property boolean handled = false      -- 이번 게임오버를 이미 처리했는지
+    property number fallbackTimer = 0     -- repayment/debt인데 Show가 안 오면 강제 표시
+    property number boxY = 0
+    property number boxVy = 0
+    property number padY = 0
+    property number padVy = 0
+    property any restartHandler = nil
+
+    @ExecSpace("ClientOnly")
+    method void OnBeginPlay()
+        -- 시작은 전부 숨김 + 재시작 버튼 클릭 연결.
+        if isvalid(self.gameOverRoot) then self.gameOverRoot.Enable = false end
+        if isvalid(self.chainOverlay) then self.chainOverlay.Enable = false end
+        if isvalid(self.restartButton) then
+            self.restartHandler = self.restartButton:ConnectEvent(ButtonClickEvent, self.OnRestartClicked)
+        end
+        log("[GameOver] OnBeginPlay")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnEndPlay()
+        -- 버튼 구독 해제(필수).
+        if self.restartHandler ~= nil and isvalid(self.restartButton) then
+            self.restartButton:DisconnectEvent(ButtonClickEvent, self.restartHandler)
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnUpdate(number delta)
+        -- 게임오버 감시 + 연출 상태머신.
+        if not _GameManager.IsGameOver then
+            -- 재시작(하강 에지): 전체 리셋.
+            if self.handled or self.phase ~= "idle" then
+                self:ResetAll()
+            end
+            return
+        end
+
+        -- 게임오버 상태.
+        if not self.handled then
+            local reason = _GameManager.GameOverReason
+            if reason == "weapon" or reason == "cube" then
+                -- 정산 연출과 겹치지 않게 대기(정산 직후 스턱 게임오버 케이스).
+                if not _NextWeekManager:IsBusy() then
+                    self:StartChainSequence()
+                end
+            else
+                -- repayment/debt: NextWeekManager가 Show를 호출한다. 5초 무응답 시 안전망으로 직접 표시.
+                self.fallbackTimer = self.fallbackTimer + delta
+                if self.fallbackTimer >= 5.0 then
+                    log_warning("[GameOver] fallback show (no NextWeek handoff)")
+                    self:Show(reason)
+                end
+            end
+            return
+        end
+
+        self.timer = self.timer + delta
+
+        if self.phase == "popupWait" then
+            -- 대출 유도 팝업이 슬라이드 인 될 시간을 준다.
+            if self.timer >= self.popupWaitTime then
+                self:BeginChainDrop()
+            end
+        elseif self.phase == "chainDrop" then
+            -- X사슬 두 줄이 팝업 위로 내려와 교차(팝업 기준 짧은 낙하).
+            local t = self.timer / self.chainSlideTime
+            if t > 1 then t = 1 end
+            local eased = 1 - (1 - t) * (1 - t)
+            local y = self.chainStartY * (1 - eased)
+            self:SetChainY(self.chainA, y)
+            self:SetChainY(self.chainB, y)
+            if t >= 1 then
+                _SoundService:PlaySound(self.clankHeavyRUID, self.sfxVolume)  -- 철컹!
+                self.phase = "padlockDrop"
+                self.timer = 0
+                self.padY = self.padlockStartY
+                self.padVy = 0
+                self:SetChainY(self.padlock, self.padY)
+                if isvalid(self.padlock) then self.padlock.Enable = true end
+                log("[GameOver] chains locked (clank)")
+            end
+        elseif self.phase == "padlockDrop" then
+            -- 자물쇠가 위에서 떨어져 팝업 중앙에 착지(작은 바운스 1~2회).
+            self.padVy = self.padVy - self.padlockGravity * delta
+            self.padY = self.padY + self.padVy * delta
+            if self.padY <= 0 then
+                self.padY = 0
+                self.padVy = -self.padVy * self.padlockRestitution
+                if self.padVy < self.padlockSettleSpeed then
+                    self.padVy = 0
+                    _SoundService:PlaySound(self.clankShortRUID, self.sfxVolume)  -- 철컹(착지)
+                    self.phase = "lockHold"
+                    self.timer = 0
+                    log("[GameOver] padlock landed (clank)")
+                end
+            end
+            self:SetChainY(self.padlock, self.padY)
+        elseif self.phase == "lockHold" then
+            if self.timer >= self.lockHoldTime then
+                self:BeginBoxDrop()
+            end
+        elseif self.phase == "boxDrop" then
+            -- 낙하 + 바닥 바운스(중력 적분, 크럼 물리 패턴 + 반발).
+            self.boxVy = self.boxVy - self.boxGravity * delta
+            self.boxY = self.boxY + self.boxVy * delta
+            if self.boxY <= 0 then
+                self.boxY = 0
+                self.boxVy = -self.boxVy * self.boxRestitution
+                if self.boxVy < self.boxSettleSpeed then
+                    self.boxVy = 0
+                    self.phase = "shown"
+                    log("[GameOver] box settled")
+                end
+            end
+            if isvalid(self.boxRoot) and isvalid(self.boxRoot.UITransformComponent) then
+                local p = self.boxRoot.UITransformComponent.anchoredPosition
+                self.boxRoot.UITransformComponent.anchoredPosition = Vector2(p.x, self.boxY)
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void Show(string reason)
+        -- 외부 진입점(NextWeekManager 깜빡임 후 호출). 사슬 없이 바로 박스 낙하.
+        if self.handled then return end
+        self.handled = true
+        if isvalid(self.chainOverlay) then self.chainOverlay.Enable = false end
+        self:FillStats(reason)
+        if isvalid(self.gameOverRoot) then self.gameOverRoot.Enable = true end
+        self:BeginBoxDrop()
+        log("[GameOver] Show(" .. tostring(reason) .. ")")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StartChainSequence()
+        -- weapon/cube 스턱 게임오버: 대출 팝업 강제 표시 → 사슬 연출 준비.
+        self.handled = true
+        self.timer = 0
+        self.phase = "popupWait"
+        _HudManager:SetForceLoanPopup(true)
+        self:FillStats(_GameManager.GameOverReason)
+        log("[GameOver] chain sequence start (" .. _GameManager.GameOverReason .. ")")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void BeginChainDrop()
+        -- 잠금 오버레이(HudGroup LoanPopup 자식) 표시 + 사슬 낙하 시작.
+        -- 게임오버 루트(딤+박스)는 아직 켜지 않는다 — 사슬 연출은 팝업 위에서만.
+        self.phase = "chainDrop"
+        self.timer = 0
+        if isvalid(self.chainOverlay) then self.chainOverlay.Enable = true end
+        if isvalid(self.padlock) then self.padlock.Enable = false end
+        self:SetChainY(self.chainA, self.chainStartY)
+        self:SetChainY(self.chainB, self.chainStartY)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void BeginBoxDrop()
+        -- 박스 낙하 시작(화면 위 바깥에서). 게임오버 루트(딤 포함)는 이 시점에 켠다.
+        self.phase = "boxDrop"
+        self.timer = 0
+        self.boxY = self.boxStartY
+        self.boxVy = 0
+        if isvalid(self.gameOverRoot) then self.gameOverRoot.Enable = true end
+        if isvalid(self.boxRoot) then
+            self.boxRoot.Enable = true
+            if isvalid(self.boxRoot.UITransformComponent) then
+                local p = self.boxRoot.UITransformComponent.anchoredPosition
+                self.boxRoot.UITransformComponent.anchoredPosition = Vector2(p.x, self.boxY)
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SetChainY(Entity chain, number offsetY)
+        -- 사슬의 세로 오프셋(0 = 제자리).
+        if not isvalid(chain) or not isvalid(chain.UITransformComponent) then return end
+        local p = chain.UITransformComponent.anchoredPosition
+        chain.UITransformComponent.anchoredPosition = Vector2(p.x, offsetY)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void FillStats(string reason)
+        -- 게임오버 표시 정보: 모은 메소 / 사용 큐브 수 / 사망 원인. (flow §16)
+        if isvalid(self.mesoValueText) then self.mesoValueText.Text = self:Comma(_GameManager.Meso) .. " 메소" end
+        if isvalid(self.cubeValueText) then self.cubeValueText.Text = tostring(_GameManager.CubeUseCount) .. "회" end
+        if isvalid(self.reasonText) then self.reasonText.Text = self:ReasonLabel(reason) end
+    end
+
+    method string ReasonLabel(string reason)
+        -- 사망 원인 문구 매핑(4종).
+        if reason == "repayment" then return "상환액을 갚지 못하였습니다"
+        elseif reason == "debt" then return "빚을 갚지 못하였습니다"
+        elseif reason == "weapon" then return "무기를 살 돈이 부족합니다"
+        elseif reason == "cube" then return "큐브를 살 돈이 부족합니다"
+        end
+        return "파산했습니다"
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnRestartClicked()
+        -- 재시작: 화면을 로비로 되돌리고 서버에 전체 리셋 요청. 리셋은 IsGameOver 하강 에지에서 수행.
+        _SoundService:PlaySound(self.clickSoundRUID, self.sfxVolume)
+        if isvalid(_LobbyManager) then _LobbyManager.ActiveScreen = "lobby" end
+        _GameManager:RequestRestart()
+        log("[GameOver] restart requested")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ResetAll()
+        -- 게임오버 해제(재시작) 시 전체 초기화.
+        self.phase = "idle"
+        self.timer = 0
+        self.handled = false
+        self.fallbackTimer = 0
+        self.boxY = 0
+        self.boxVy = 0
+        if isvalid(self.gameOverRoot) then self.gameOverRoot.Enable = false end
+        if isvalid(self.chainOverlay) then self.chainOverlay.Enable = false end
+        _HudManager:SetForceLoanPopup(false)
+        log("[GameOver] reset (restart)")
+    end
+
+    method string Comma(integer n)
+        -- 천 단위 콤마.
+        local sg = ""
+        if n < 0 then sg = "-" n = -n end
+        local s = tostring(n)
+        local out = ""
+        local cnt = 0
+        for i = #s, 1, -1 do
+            out = string.sub(s, i, i) .. out
+            cnt = cnt + 1
+            if cnt % 3 == 0 and i > 1 then out = "," .. out end
+        end
+        return sg .. out
+    end
+end

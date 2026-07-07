@@ -1,0 +1,126 @@
+@Logic
+script VictoryManager extends Logic
+    -- 승리 UI(간단 버전). 상환 winStage회(5주) 성공 시 IsVictory 상승 에지로 표시.
+    -- 정산 팝업(NextWeekManager) 연출이 끝날 때까지 대기 후 페이드/스케일 인.
+    -- 표시: 최종 메소 / 사용 큐브 / 판매 횟수 / 최고 판매가 + 다시 하기. (finance_management.md 승리 조건)
+
+    -- ===== Bound entities (UUID는 UIBuilder가 주입) =====
+    property Entity victoryRoot = "5ffc93d5-bc39-4b52-b7f9-833f8cea6d91"
+    property Entity boxRoot = "509d6daa-4fdd-4885-a513-c59bb646a982"
+    property TextComponent mesoValueText = "76421a30-e2f7-4529-824e-15ef9ce05f6c"
+    property TextComponent cubeValueText = "30cc8c03-d813-4ed2-b14b-5b8c3c159a5a"
+    property TextComponent sellValueText = "0d23e16d-5b7a-43e8-9ae3-e1503788645b"
+    property TextComponent maxPriceValueText = "8322c89b-f186-4f5b-8f56-c5152f03e3f0"
+    property Entity restartButton = "0330f0fd-bd41-4e26-956f-362fcc9b1237"
+
+    property number showTime = 0.35  -- 스케일/페이드 인 시간
+    property string clickSoundRUID = "972843e759204d3e9ad84e7d3fa94f83"  -- 공용 클릭음(프로젝트)
+    property number sfxVolume = 1.0
+
+    -- ===== Runtime state =====
+    property string phase = "idle"   -- idle/waiting/showing/shown
+    property number timer = 0
+    property any restartHandler = nil
+
+    @ExecSpace("ClientOnly")
+    method void OnBeginPlay()
+        -- 시작은 숨김 + 재시작 버튼 연결.
+        if isvalid(self.victoryRoot) then self.victoryRoot.Enable = false end
+        if isvalid(self.restartButton) then
+            self.restartHandler = self.restartButton:ConnectEvent(ButtonClickEvent, self.OnRestartClicked)
+        end
+        log("[Victory] OnBeginPlay")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnEndPlay()
+        -- 버튼 구독 해제(필수).
+        if self.restartHandler ~= nil and isvalid(self.restartButton) then
+            self.restartButton:DisconnectEvent(ButtonClickEvent, self.restartHandler)
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnUpdate(number delta)
+        -- 승리 감시 + 표시 연출.
+        if not _GameManager.IsVictory then
+            -- 재시작(하강 에지) 리셋.
+            if self.phase ~= "idle" then
+                self.phase = "idle"
+                self.timer = 0
+                if isvalid(self.victoryRoot) then self.victoryRoot.Enable = false end
+                log("[Victory] reset (restart)")
+            end
+            return
+        end
+
+        if self.phase == "idle" then
+            self.phase = "waiting"
+            self.timer = 0
+        end
+
+        if self.phase == "waiting" then
+            -- 정산 팝업 연출(메소 차감 스크롤 등)이 끝난 뒤 표시.
+            if not _NextWeekManager:IsBusy() then
+                self:ShowBox()
+            end
+        elseif self.phase == "showing" then
+            self.timer = self.timer + delta
+            local t = self.timer / self.showTime
+            if t > 1 then t = 1 end
+            local eased = 1 - (1 - t) * (1 - t)
+            local s = 0.7 + 0.3 * eased
+            if isvalid(self.boxRoot) and isvalid(self.boxRoot.UITransformComponent) then
+                self.boxRoot.UITransformComponent.UIScale = Vector3(s, s, 1)
+            end
+            local cg = isvalid(self.victoryRoot) and self.victoryRoot.CanvasGroupComponent or nil
+            if isvalid(cg) then cg.GroupAlpha = eased end
+            if t >= 1 then
+                self.phase = "shown"
+                log("[Victory] shown")
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ShowBox()
+        -- 통계 채우고 표시 시작.
+        if isvalid(self.mesoValueText) then self.mesoValueText.Text = self:Comma(_GameManager.Meso) .. " 메소" end
+        if isvalid(self.cubeValueText) then self.cubeValueText.Text = tostring(_GameManager.CubeUseCount) .. "회" end
+        if isvalid(self.sellValueText) then self.sellValueText.Text = tostring(_GameManager.TotalSellCount) .. "회" end
+        if isvalid(self.maxPriceValueText) then self.maxPriceValueText.Text = self:Comma(_GameManager.MaxSellPrice) .. " 메소" end
+        if isvalid(self.victoryRoot) then self.victoryRoot.Enable = true end
+        local cg = isvalid(self.victoryRoot) and self.victoryRoot.CanvasGroupComponent or nil
+        if isvalid(cg) then cg.GroupAlpha = 0 end
+        self.phase = "showing"
+        self.timer = 0
+        log("[Victory] show: meso=" .. tostring(_GameManager.Meso)
+            .. ", cubes=" .. tostring(_GameManager.CubeUseCount)
+            .. ", sells=" .. tostring(_GameManager.TotalSellCount)
+            .. ", maxPrice=" .. tostring(_GameManager.MaxSellPrice))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnRestartClicked()
+        -- 다시 하기: 로비 화면 복귀 + 서버 전체 리셋.
+        _SoundService:PlaySound(self.clickSoundRUID, self.sfxVolume)
+        if isvalid(_LobbyManager) then _LobbyManager.ActiveScreen = "lobby" end
+        _GameManager:RequestRestart()
+        log("[Victory] restart requested")
+    end
+
+    method string Comma(integer n)
+        -- 천 단위 콤마.
+        local sg = ""
+        if n < 0 then sg = "-" n = -n end
+        local s = tostring(n)
+        local out = ""
+        local cnt = 0
+        for i = #s, 1, -1 do
+            out = string.sub(s, i, i) .. out
+            cnt = cnt + 1
+            if cnt % 3 == 0 and i > 1 then out = "," .. out end
+        end
+        return sg .. out
+    end
+end

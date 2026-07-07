@@ -113,18 +113,30 @@ script BlacksmithConfig extends Logic
         --   수치는 초기 기준안(weapon_shop.md §7·§9 참조) — 플레이테스트로 조정.
         d.shopSlotCount = 3  -- 상점에 동시에 노출되는 무기 슬롯 수 (weapon_shop.md §4 기준: 3슬롯)
         d.weaponGradeOrder = {"Common", "Rare", "Epic", "Unique", "Legendary"}
+        -- prob = 0단계(더좋은물품 미보유) 기본 등장 확률(%) — 무기 상점 기획서 §9 기준안(60/30/9/1/0, 합 100).
+        --   0단계에서는 레전더리 0%·유니크 1% — 상위 등급은 증강 '더 좋은 물품'(betterGoodsGradeProb)으로만 열린다.
         d.weaponGrades = {
-            Common    = { key = "Common",    label = "커먼",     basePrice = 25000,  buyCost = 30000,  prob = 30, color = {0.62, 0.64, 0.68} },
+            Common    = { key = "Common",    label = "커먼",     basePrice = 25000,  buyCost = 30000,  prob = 60, color = {0.62, 0.64, 0.68} },
             Rare      = { key = "Rare",      label = "레어",     basePrice = 50000,  buyCost = 60000,  prob = 30, color = {0.30, 0.58, 0.92} },
-            Epic      = { key = "Epic",      label = "에픽",     basePrice = 100000, buyCost = 120000, prob = 28, color = {0.70, 0.40, 0.92} },
-            Unique    = { key = "Unique",    label = "유니크",   basePrice = 200000, buyCost = 240000, prob = 10, color = {0.96, 0.80, 0.22} },
-            Legendary = { key = "Legendary", label = "레전더리", basePrice = 400000, buyCost = 480000, prob = 2,  color = {0.40, 0.85, 0.45} },
+            Epic      = { key = "Epic",      label = "에픽",     basePrice = 100000, buyCost = 120000, prob = 9,  color = {0.70, 0.40, 0.92} },
+            Unique    = { key = "Unique",    label = "유니크",   basePrice = 200000, buyCost = 240000, prob = 1,  color = {0.96, 0.80, 0.22} },
+            Legendary = { key = "Legendary", label = "레전더리", basePrice = 400000, buyCost = 480000, prob = 0,  color = {0.40, 0.85, 0.45} },
         }
 
-        -- 빚 상환 (concept §6-3, flow §15)
-        d.debtCycle = 5                              -- N회 큐브 사용마다 상환
-        d.debtTable = {45000, 70000, 100000, 140000} -- 1~4단계 금액 (stage1 45000 > 시작메소 40000 → 초기부터 압박)
-        d.debtStep = 40000                           -- 5단계 이후 단계마다 증가폭
+        -- 증강 '더 좋은 물품 들여오기' 단계별 상점 등급 절대 확률표 (blacksmith_upgrade.md §6).
+        --   0단계(미보유) = 위 weaponGrades.prob(30/30/28/10/2). 각 표의 합은 100.
+        --   1단계는 레전더리 0% — RollWeaponGrade가 0 가중치를 허용하므로 그대로 동작한다.
+        d.betterGoodsGradeProb = {
+            [1] = { Common = 35, Rare = 45, Epic = 14, Unique = 6,  Legendary = 0  },
+            [2] = { Common = 20, Rare = 50, Epic = 19, Unique = 9,  Legendary = 2  },
+            [3] = { Common = 12, Rare = 35, Epic = 26, Unique = 17, Legendary = 10 },
+        }
+
+        -- 빚 상환 (concept §6-3, flow §15, finance_management.md 상환액 스케줄)
+        d.debtCycle = 5                              -- N회 큐브 사용마다 상환 (5/5 = 한 주 경과)
+        d.debtTable = {45000, 70000, 100000, 140000} -- 1~4주 금액 (stage1 45000 > 시작메소 40000 → 초기부터 압박)
+        d.debtGrowth = 1.1                           -- 테이블 범위 밖(5주~)은 매주 ×1.1 (10% 증가, 1000단위 반올림)
+        d.winStage = 5                               -- 상환 N회 성공 시 승리 (finance_management.md 승리 조건)
 
         -- ── 대장 기술(증강) (blacksmith_upgrade.md §5·§6) ──────────────────────────
         --   증강은 상환 단계 도달 시 3택 1로 획득(MVP 트리거). 같은 증강 중복 시 단계 상승(최대 3).
@@ -136,20 +148,21 @@ script BlacksmithConfig extends Logic
         d.augmentOrder = {"betterGoods", "smithEye", "priceNego", "riskyDeal"}
         d.augments = {
             -- 더 좋은 물품 들여오기: 상점에 높은 등급 무기가 등장할 확률 증가 (§6, 적용=RollShop)
-            --   stages = 높은 등급(Epic/Unique/Legendary) 추첨 가중치 배수. 1.5x/2.0x/3.0x.
+            --   ⚠ 효과는 배수가 아니라 단계별 절대 확률표(d.betterGoodsGradeProb)로 적용된다.
+            --     stages는 단계 표기용(1/2/3)일 뿐 수치 의미 없음 — RollShop이 보유 단계를 직접 넘긴다.
             betterGoods = { key = "betterGoods", name = "더 좋은 물품 들여오기", type = "shopGrade",
                 applyTarget = "RollShop", desc = "무기 상점에 높은 등급 무기가 등장할 확률 증가",
-                stages = {1.5, 2.0, 3.0} },
+                stages = {1, 2, 3} },
             -- 대장장이의 눈: 현재 무기와 맞는 유효 옵션 등장 확률 증가 (§6, 적용=RollLine)
-            --   stages = 주요 옵션 1줄이 '유효 옵션'으로 강제될 확률(%). 15/30/50.
+            --   stages = 주요 옵션 1줄이 '유효 옵션'으로 강제될 확률(%). 10/20/45 (blacksmith_upgrade.md §6).
             smithEye = { key = "smithEye", name = "대장장이의 눈", type = "validOption",
                 applyTarget = "RollLine", desc = "현재 무기의 유효 옵션 등장 확률 증가",
-                stages = {15, 30, 50} },
+                stages = {10, 20, 45} },
             -- 가격 협상: 무기 구매가 감소, 게임 끝까지 유지 (§6, 적용=RequestBuyItem)
-            --   stages = 구매가 감소율(%). 5/10/15.
+            --   stages = 구매가 감소율(%). 10/18/40 (blacksmith_upgrade.md §6).
             priceNego = { key = "priceNego", name = "가격 협상", type = "buyCost",
                 applyTarget = "RequestBuyItem", desc = "무기 구매가 감소",
-                stages = {5, 10, 15} },
+                stages = {10, 18, 40} },
             -- 위험 거래: 상환 이자 증가 + 판매가 증가(고위험 고수익) (§6, 적용=Pricing+Debt)
             --   stages = 판매가/상환이자 동시 증가율(%). 10/20/30.
             riskyDeal = { key = "riskyDeal", name = "위험 거래", type = "riskReward",
@@ -206,29 +219,54 @@ script BlacksmithConfig extends Logic
         return self:GetData().weaponGradeOrder
     end
 
-    method string RollWeaponGrade(number highGradeMult)
-        -- prob 가중치로 무기 등급 1개를 추첨한다(서버 권위 추첨에서 호출).
-        -- highGradeMult: 상위 등급(Epic/Unique/Legendary) 가중치 배수(증강 '더 좋은 물품'). nil/1이면 기본 확률.
-        --   가중치를 재정규화해 확률로 환산하므로 prob 합이 100이 아니어도 동작한다.
+    method any GetShopGradeProbTable(integer betterGoodsStage)
+        -- 상점 등급 확률표 반환 {gradeKey=확률(%)}. (blacksmith_upgrade.md §6)
+        --   0단계(미보유) = weaponGrades.prob 기본표, 1~3단계 = betterGoodsGradeProb 절대 확률표.
+        --   범위 초과 단계는 최대 단계 표로 클램프. 각 표의 합은 100이라 값이 곧 %다.
         local d = self:GetData()
-        local mult = highGradeMult or 1.0
-        -- 각 등급 가중치 계산(상위 2개 등급에 배수 적용) + 총합.
-        local weights = {}
+        if betterGoodsStage >= 1 then
+            local n = #d.betterGoodsGradeProb
+            local stage = betterGoodsStage
+            if stage > n then stage = n end
+            return d.betterGoodsGradeProb[stage]
+        end
+        local base = {}
+        for _, key in ipairs(d.weaponGradeOrder) do
+            base[key] = d.weaponGrades[key].prob
+        end
+        return base
+    end
+
+    method any RollWeaponGradeDetail(integer betterGoodsStage)
+        -- 등급 확률표로 무기 등급 1개를 추첨하고 추첨 상세를 반환한다(서버 권위 추첨에서 호출).
+        -- betterGoodsStage: 증강 '더 좋은 물품' 보유 단계(0=미보유). 단계별 절대 확률표를 사용한다.
+        --   가중치를 재정규화해 확률로 환산하므로 표의 합이 100이 아니어도 동작한다(0 가중치 허용).
+        -- 반환: { grade = 등급 key, roll = 실제 뽑힌 랜덤 값(0~total), total = 가중치 총합(보통 100) }
+        --   roll은 등급 누적 구간과 비교해 "몇이 떠서 이 등급이 나왔는지" 로그 표기에 쓰인다.
+        local d = self:GetData()
+        local weights = self:GetShopGradeProbTable(betterGoodsStage)
         local total = 0
         for _, key in ipairs(d.weaponGradeOrder) do
-            local w = d.weaponGrades[key].prob
-            if key == "Epic" or key == "Unique" or key == "Legendary" then w = w * mult end
-            weights[key] = w
-            total = total + w
+            total = total + weights[key]
         end
-        if total <= 0 then return d.weaponGradeOrder[1] end
+        if total <= 0 then
+            return { grade = d.weaponGradeOrder[1], roll = 0, total = 0 }
+        end
         local roll = _UtilLogic:RandomDouble() * total
         local acc = 0
         for _, key in ipairs(d.weaponGradeOrder) do
             acc = acc + weights[key]
-            if roll <= acc then return key end
+            if roll <= acc then
+                return { grade = key, roll = roll, total = total }
+            end
         end
-        return d.weaponGradeOrder[#d.weaponGradeOrder]  -- 폴백(부동소수 오차 대비)
+        return { grade = d.weaponGradeOrder[#d.weaponGradeOrder], roll = roll, total = total }  -- 폴백(부동소수 오차 대비)
+    end
+
+    method string RollWeaponGrade(integer betterGoodsStage)
+        -- 등급 key만 필요한 호출부용 래퍼(분포 테스트 등). 상세는 RollWeaponGradeDetail 참조.
+        local r = self:RollWeaponGradeDetail(betterGoodsStage)
+        return r.grade
     end
 
     method number GetGradeMultiplier(string grade)
@@ -262,12 +300,14 @@ script BlacksmithConfig extends Logic
     end
 
     method integer GetDebtAmount(integer stage)
-        -- 상환 단계별 금액(1부터). debtTable 범위를 넘으면 단계마다 debtStep씩 증가.
+        -- 상환 단계(주차)별 금액(1부터). debtTable 범위를 넘으면 매주 ×debtGrowth(10% 증가), 1000단위 반올림.
+        -- (finance_management.md 상환액 스케줄 SSOT)
         local d = self:GetData()
         if stage < 1 then return 0 end
         local n = #d.debtTable
         if stage <= n then return d.debtTable[stage] end
-        return d.debtTable[n] + (stage - n) * d.debtStep
+        local amount = d.debtTable[n] * (d.debtGrowth ^ (stage - n))
+        return math.floor(amount / 1000 + 0.5) * 1000
     end
 
     method any GetAugment(string key)
