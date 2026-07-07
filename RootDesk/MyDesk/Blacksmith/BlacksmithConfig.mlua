@@ -146,28 +146,34 @@ script BlacksmithConfig extends Logic
         d.augmentMaxStage = 3      -- 한 증강당 최대 단계 (§5: 3단계까지만 등장)
         d.augmentChoiceCount = 3   -- 획득 시 제시하는 무작위 선택지 수 (§4-4: 3개)
         d.augmentOrder = {"betterGoods", "smithEye", "priceNego", "riskyDeal"}
+        -- 증강 구매 비용 = 증강이 '도달할 단계' 기준(단계 높을수록 비쌈). (blacksmith_upgrade.md §3)
+        --   구매 방식(유저 확정): 로비 '대장 기술' → 3택 창 → 각 증강 하단의 구매 골드로 즉시 지불.
+        --   1단계 7,500 / 2단계 12,500 / 3단계 20,000. 범위 밖은 마지막 값으로 클램프.
+        d.augmentCosts = {7500, 12500, 20000}
+        -- icon: 증강 아이콘 스프라이트 RUID(증강 UI 슬롯/보유 목록). plain 스프라이트라 thumbnail:// 접두사 없이
+        --   ImageRUID에 직접 설정한다(cubes.icon 패턴). msw-search로 확보한 메이플 공식 아이템 아이콘.
         d.augments = {
             -- 더 좋은 물품 들여오기: 상점에 높은 등급 무기가 등장할 확률 증가 (§6, 적용=RollShop)
             --   ⚠ 효과는 배수가 아니라 단계별 절대 확률표(d.betterGoodsGradeProb)로 적용된다.
             --     stages는 단계 표기용(1/2/3)일 뿐 수치 의미 없음 — RollShop이 보유 단계를 직접 넘긴다.
             betterGoods = { key = "betterGoods", name = "더 좋은 물품 들여오기", type = "shopGrade",
                 applyTarget = "RollShop", desc = "무기 상점에 높은 등급 무기가 등장할 확률 증가",
-                stages = {1, 2, 3} },
+                stages = {1, 2, 3}, icon = "c3c4aca456474afe9602518db5c21abe" },  -- 금은보화(보물상자)
             -- 대장장이의 눈: 현재 무기와 맞는 유효 옵션 등장 확률 증가 (§6, 적용=RollLine)
             --   stages = 주요 옵션 1줄이 '유효 옵션'으로 강제될 확률(%). 10/20/45 (blacksmith_upgrade.md §6).
             smithEye = { key = "smithEye", name = "대장장이의 눈", type = "validOption",
                 applyTarget = "RollLine", desc = "현재 무기의 유효 옵션 등장 확률 증가",
-                stages = {10, 20, 45} },
+                stages = {10, 20, 45}, icon = "2c87d6385a60420ab55fa8d36ff3d6dc" },  -- 감정 돋보기
             -- 가격 협상: 무기 구매가 감소, 게임 끝까지 유지 (§6, 적용=RequestBuyItem)
             --   stages = 구매가 감소율(%). 10/18/40 (blacksmith_upgrade.md §6).
             priceNego = { key = "priceNego", name = "가격 협상", type = "buyCost",
                 applyTarget = "RequestBuyItem", desc = "무기 구매가 감소",
-                stages = {10, 18, 40} },
+                stages = {10, 18, 40}, icon = "0bc56bdb2ba54b3dbdf43ff07cddb57f" },  -- 돈 주머니
             -- 위험 거래: 상환 이자 증가 + 판매가 증가(고위험 고수익) (§6, 적용=Pricing+Debt)
             --   stages = 판매가/상환이자 동시 증가율(%). 10/20/30.
             riskyDeal = { key = "riskyDeal", name = "위험 거래", type = "riskReward",
                 applyTarget = "Pricing+Debt", desc = "상환 이자 증가, 대신 판매가 증가",
-                stages = {10, 20, 30} },
+                stages = {10, 20, 30}, icon = "8114bc5eeba544989e14a8e46a1ea0f2" },  -- 시한폭탄
         }
 
         -- ── 재정 관리 (finance_management.md) ─────────────────────────────────────
@@ -328,6 +334,16 @@ script BlacksmithConfig extends Logic
         if stage < 1 then return 0 end
         if stage > n then stage = n end
         return a.stages[stage]
+    end
+
+    method integer GetAugmentCost(integer stage)
+        -- 증강 구매 비용(도달할 단계 기준). 서버·클라 공용(클라 가격 표시용, ExecSpace 없음).
+        --   stage = 이 구매로 도달하는 단계(현재단계+1). 범위 밖은 마지막 값으로 클램프. (blacksmith_upgrade.md §3)
+        local costs = self:GetData().augmentCosts
+        local n = #costs
+        if stage < 1 then stage = 1 end
+        if stage > n then stage = n end
+        return costs[stage]
     end
 
     method any GetLoanConfig()

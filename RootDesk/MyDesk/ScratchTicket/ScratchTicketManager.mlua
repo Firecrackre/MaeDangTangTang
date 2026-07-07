@@ -600,6 +600,7 @@ script ScratchTicketManager extends Component
         self:SetButtonEnabled(self.reuseButton, not _GameManager.IsRepaymentDue)
         self:SetButtonEnabled(self.sellButton, true)
         log("[ScratchTicket] all revealed -> price=" .. tostring(_GameManager.CurrentPrice)
+            .. " = " .. _GameManager.CurrentPriceFormula
             .. ", repayDue=" .. tostring(_GameManager.IsRepaymentDue))
     end
 

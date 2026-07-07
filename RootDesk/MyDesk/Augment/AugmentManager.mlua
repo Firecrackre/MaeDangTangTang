@@ -1,0 +1,636 @@
+@Logic
+script AugmentManager extends Logic
+    -- 뒷골목 대장장이 — 대장 기술(증강) 업그레이드 페이지(클라 전용 표시/입력).
+    -- 진입: 로비 '대장 기술' 버튼 → Open(). 종료: X 버튼 → Close().
+    --   화면 상태 SSOT는 LobbyManager.ActiveScreen("augment"). 여기서 전환·복귀한다(FinanceManager와 동일 패턴).
+    --   모든 재화/증강 연산은 서버 권위(_GameManager:RequestSelectAugment). 여기서는 표시·입력·연출만.
+    -- 흐름(blacksmith_upgrade.md §3·§4, 유저 확정): 버튼 → 3택 슬롯머신 스핀 → 각 증강 하단 구매 골드로 즉시 구매 →
+    --   구매 완료 시 창 새로고침(재추첨). 미구매 퇴장 후 재진입 시 스핀 없이 그대로 유지. 잔여 ≤3종은 칸 수 축소.
+    -- @Logic 이유: _AugmentManager 전역 접근(Lobby가 Open 호출) + AugmentGroup엔 in-group @Component가 없어
+    --   루트 Enable 게이팅이 안전(FinanceManager/HudManager와 동일).
+
+    property string TargetMapName = "InGameMap"
+    property string prevScreen = "lobby"
+
+    -- ── 슬롯머신 스핀 연출 튜닝(인스펙터 SSOT — WeaponShopManager 값 차용) ──
+    property number SpinStopBase = 0.9
+    property number SpinStopGap = 0.6
+    property number ReelSpeed = 700.0
+    property number ReelSlowdownWindow = 0.45
+    property number PunchDuration = 0.22
+    property number SlotSpacingX = 300.0   -- 3슬롯 간 X 간격(칸 축소 시 가운데 정렬 계산에 사용)
+
+    -- 사운드(ui-sound.md 클릭 + msw-search 오류음 + 강화 성공음/정지음).
+    property string clickSoundRUID = "972843e759204d3e9ad84e7d3fa94f83"
+    property string errorSoundRUID = "174d501eccd04eadbd6c6411d4ade7e7"
+    property string successSoundRUID = "b060035abee84543bdd77c69dc7aeab3"
+    property string reelStopSoundRUID = "972843e759204d3e9ad84e7d3fa94f83"
+    property number sfxVolume = 1.0
+
+    -- ── UI 참조(UUID는 UIBuilder write({bind})로 주입) ──
+    property Entity augmentRoot = "65d79d8b-810c-485f-bc42-cd88bac206f6"     -- AugmentGroup 루트(맵/화면 게이팅)
+    property Entity choiceView = "a3477a16-a3e0-4fdb-b78e-fcfcf4650dad"      -- 3택 창 컨테이너
+    property Entity choiceBoard = "a123e801-2241-42e4-85dd-035a3b891d87"     -- 3택 창 보드(구매 불가 클릭 시 흔들림 대상)
+    property Entity ownedView = "0e4fe259-9b28-47c7-ab52-127b50dccbf3"       -- 보유 증강 목록 컨테이너
+    property ButtonComponent btnClose = "d58544c7-fc8b-4548-b909-85f352eb5612"      -- 3택 창 X
+    property ButtonComponent btnOwned = "3404f3f8-b319-4ffb-8a74-d371de9d2b5f"      -- '보유 증강' 열기
+    property ButtonComponent btnCloseOwned = "92a96c7f-92a6-46bc-b568-c72f66af000b" -- 보유 목록 X
+    property TextGUIRendererComponent emptyChoiceText = "83b781b7-4114-43d2-aa0f-b4a18d969cd1" -- 모든 증강 소진 안내
+    property TextGUIRendererComponent emptyOwnedText = "275e4c0f-7d9e-4221-bff1-cf082e82aa1a"  -- 보유 없음 안내
+
+    -- ── 런타임 상태 ──
+    property boolean isActive = false
+    property string lastChoicesData = ""
+    property string lastOwnedData = ""
+    property Vector2 boardBasePos = Vector2(0, 0)
+    property number shakeTime = 0
+
+    -- 스핀 상태(연출 전용 — 결과는 서버 확정).
+    property boolean spinning = false
+    property number spinTime = 0
+    property any spinSlots = nil
+    property any slotData = nil      -- slotData[i] = { key, cost, stage }
+    property any fxSlots = nil
+
+    -- 슬롯/자식 캐시(CacheSlots가 채움).
+    property any slotEntities = nil
+    property any iconEntities = nil
+    property any reelMasks = nil
+    property any reelIcon1 = nil
+    property any reelIcon2 = nil
+    property any buyButtons = nil
+    property any slotBaseY = nil
+    property any buyHandlers = nil
+
+    property any closeHandler = nil
+    property any ownedHandler = nil
+    property any closeOwnedHandler = nil
+
+    @ExecSpace("ClientOnly")
+    method void OnBeginPlay()
+        -- 캐싱은 루트가 켜진 상태에서 해야 GetChildByName이 자식을 찾는다 → 캐싱/배선 후 루트를 끈다.
+        self.isActive = false
+        self.spinning = false
+        self.spinSlots = {}
+        self.fxSlots = {}
+        self.slotData = {}
+        self.buyHandlers = {}
+        self.lastChoicesData = ""
+        self.lastOwnedData = ""
+        self.shakeTime = 0
+
+        if isvalid(self.choiceBoard) and isvalid(self.choiceBoard.UITransformComponent) then
+            self.boardBasePos = self.choiceBoard.UITransformComponent.anchoredPosition
+        end
+
+        self:CacheSlots()
+        self:WireButtons()
+        self:ResetFXEntities()
+
+        -- 상단 버튼(X / 보유 증강 / 보유목록 X) 연결(ConnectEvent는 Entity에서).
+        if isvalid(self.btnClose) then
+            self.closeHandler = self.btnClose.Entity:ConnectEvent(ButtonClickEvent, self.OnCloseClicked)
+        end
+        if isvalid(self.btnOwned) then
+            self.ownedHandler = self.btnOwned.Entity:ConnectEvent(ButtonClickEvent, self.OnOwnedClicked)
+        end
+        if isvalid(self.btnCloseOwned) then
+            self.closeOwnedHandler = self.btnCloseOwned.Entity:ConnectEvent(ButtonClickEvent, self.OnCloseOwnedClicked)
+        end
+
+        if isvalid(self.ownedView) then self.ownedView.Enable = false end
+        if isvalid(self.choiceView) then self.choiceView.Enable = true end
+        if isvalid(self.augmentRoot) then self.augmentRoot.Enable = false end
+        log("[AugmentManager] ready. slots cached=" .. tostring(self.slotEntities ~= nil and #self.slotEntities or 0))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void CacheSlots()
+        -- 슬롯/아이콘/릴 엔티티 (재)캐싱(멱등). choiceBoard가 켜져 있어야 GetChildByName이 찾는다.
+        self.slotEntities = {}
+        self.iconEntities = {}
+        self.reelMasks = {}
+        self.reelIcon1 = {}
+        self.reelIcon2 = {}
+        self.buyButtons = {}
+        self.slotBaseY = {}
+        if not isvalid(self.choiceBoard) then return end
+        local maxSlots = _BlacksmithConfig:GetData().augmentChoiceCount
+        for i = 1, maxSlots do
+            local e = self.choiceBoard:GetChildByName("Slot" .. tostring(i), true)
+            self.slotEntities[i] = e
+            if isvalid(e) then
+                self.iconEntities[i] = e:GetChildByName("Icon", false)
+                if isvalid(e.UITransformComponent) then
+                    self.slotBaseY[i] = e.UITransformComponent.anchoredPosition.y
+                end
+                local rm = e:GetChildByName("ReelMask", false)
+                self.reelMasks[i] = rm
+                if isvalid(rm) then
+                    self.reelIcon1[i] = rm:GetChildByName("ReelIcon1", false)
+                    self.reelIcon2[i] = rm:GetChildByName("ReelIcon2", false)
+                end
+                self.buyButtons[i] = e:GetChildByName("BtnBuy", false)
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void WireButtons()
+        -- 슬롯별 구매 버튼 연결(1회). 인덱스를 클로저로 캡처. 해제는 OnEndPlay.
+        if self.slotEntities == nil then return end
+        for i = 1, #self.slotEntities do
+            -- buyButtons[i]는 GetChildByName이 돌려준 '엔티티'다(컴포넌트 아님). ConnectEvent는 엔티티에서.
+            local btn = self.buyButtons[i]
+            if isvalid(btn) then
+                local idx = i
+                local h = btn:ConnectEvent(ButtonClickEvent, function() self:OnBuyClicked(idx) end)
+                table.insert(self.buyHandlers, { entity = btn, eventHandler = h })
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnEndPlay()
+        -- 연결한 이벤트 해제(필수).
+        if self.buyHandlers ~= nil then
+            for _, rec in ipairs(self.buyHandlers) do
+                if isvalid(rec.entity) then
+                    rec.entity:DisconnectEvent(ButtonClickEvent, rec.eventHandler)
+                end
+            end
+        end
+        if self.closeHandler ~= nil and isvalid(self.btnClose) then
+            self.btnClose.Entity:DisconnectEvent(ButtonClickEvent, self.closeHandler)
+        end
+        if self.ownedHandler ~= nil and isvalid(self.btnOwned) then
+            self.btnOwned.Entity:DisconnectEvent(ButtonClickEvent, self.ownedHandler)
+        end
+        if self.closeOwnedHandler ~= nil and isvalid(self.btnCloseOwned) then
+            self.btnCloseOwned.Entity:DisconnectEvent(ButtonClickEvent, self.closeOwnedHandler)
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void Open()
+        -- 대장 기술 페이지 진입: 이전 화면 저장 → ActiveScreen="augment" 전환(서버 상태 정합).
+        if _GameManager.IsGameOver or _GameManager.IsVictory then return end
+        local screen = isvalid(_LobbyManager) and _LobbyManager.ActiveScreen or "lobby"
+        if screen ~= "augment" then self.prevScreen = screen end
+        if isvalid(_LobbyManager) then _LobbyManager.ActiveScreen = "augment" end
+        _GameManager:EnterActivity("augment")
+        self.shakeTime = 0
+        -- 진입 시 보유목록은 닫고 3택 창을 기본 노출.
+        if isvalid(self.ownedView) then self.ownedView.Enable = false end
+        if isvalid(self.choiceView) then self.choiceView.Enable = true end
+        log("[AugmentManager] open (prevScreen=" .. self.prevScreen .. ")")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void Close()
+        -- 페이지 종료: 이전 화면 복귀 + 서버 로비 복귀. 스핀/흔들림 정리.
+        if self.spinning then self:FinishSpinInstant() end
+        if isvalid(_LobbyManager) then _LobbyManager.ActiveScreen = self.prevScreen end
+        _GameManager:ReturnToLobby()
+        self.shakeTime = 0
+        if isvalid(self.choiceBoard) and isvalid(self.choiceBoard.UITransformComponent) then
+            self.choiceBoard.UITransformComponent.anchoredPosition = self.boardBasePos
+        end
+        log("[AugmentManager] close -> " .. self.prevScreen)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnUpdate(number delta)
+        -- 화면 게이팅: InGameMap + ActiveScreen=="augment"일 때만 페이지 표시.
+        local lp = _UserService.LocalPlayer
+        local onMap = isvalid(lp) and lp.CurrentMapName == self.TargetMapName
+        local screen = isvalid(_LobbyManager) and _LobbyManager.ActiveScreen or "lobby"
+        local show = onMap and (screen == "augment")
+        if isvalid(self.augmentRoot) then self.augmentRoot.Enable = show end
+        if not show then
+            self.isActive = false
+            return
+        end
+        self.isActive = true
+
+        -- 새 추첨(첫 열람) 또는 구매(owned 변화) 감지 → 슬롯머신 스핀으로 3택 갱신.
+        --   미구매 재진입은 두 데이터 모두 불변이라 스핀하지 않는다(§4-4-1 유지 규칙).
+        local choices = _GameManager.AugmentChoicesData
+        local owned = _GameManager.AugmentsData
+        if choices ~= self.lastChoicesData or owned ~= self.lastOwnedData then
+            self.lastChoicesData = choices
+            self.lastOwnedData = owned
+            if choices == "" then
+                self:ShowEmptyChoice()
+            else
+                self:StartSpin(choices)
+            end
+        end
+
+        -- 스핀 진행 + 정지 펀치 연출.
+        if self.spinning then self:UpdateSpin(delta) end
+        self:UpdateFX(delta)
+
+        -- 정지한 슬롯의 구매 버튼 활성 상태 갱신(메소 변화 대응).
+        if not self.spinning then self:RefreshChoiceView() end
+
+        -- 보유 목록이 열려 있으면 매 프레임 최신 상태 반영(구매 직후 반영).
+        if isvalid(self.ownedView) and self.ownedView.Enable then
+            self:RenderOwnedView()
+        end
+
+        -- 구매 불가 클릭 시 보드 흔들림(0.5초).
+        if self.shakeTime > 0 then
+            self.shakeTime = self.shakeTime - delta
+            if isvalid(self.choiceBoard) and isvalid(self.choiceBoard.UITransformComponent) then
+                if self.shakeTime > 0 then
+                    local jx = (_UtilLogic:RandomDouble() - 0.5) * 20
+                    local jy = (_UtilLogic:RandomDouble() - 0.5) * 10
+                    self.choiceBoard.UITransformComponent.anchoredPosition =
+                        Vector2(self.boardBasePos.x + jx, self.boardBasePos.y + jy)
+                else
+                    self.choiceBoard.UITransformComponent.anchoredPosition = self.boardBasePos
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ShowEmptyChoice()
+        -- 모든 증강 소진(선택지 없음): 모든 슬롯 숨김 + 안내 표시.
+        if self.slotEntities ~= nil then
+            for i = 1, #self.slotEntities do
+                if isvalid(self.slotEntities[i]) then self.slotEntities[i].Enable = false end
+            end
+        end
+        if isvalid(self.emptyChoiceText) then
+            self.emptyChoiceText.Text = "모든 대장 기술을 마스터했습니다!"
+            self.emptyChoiceText.Entity.Enable = true
+        end
+        self.spinning = false
+        log("[AugmentManager] all augments mastered - empty choice view")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StartSpin(string data)
+        -- 새 추첨 도착 → 슬롯머신 스핀 시작(연출 전용). 위→아래 순차 정지. 잔여 <3종이면 칸 수 축소+가운데 정렬.
+        if self.slotEntities == nil or #self.slotEntities == 0 then self:CacheSlots() end
+        self:ResetFXEntities()
+        if isvalid(self.emptyChoiceText) then self.emptyChoiceText.Entity.Enable = false end
+
+        -- 선택지 파싱(key CSV). slotData[i] = { key, cost, stage }.
+        self.slotData = {}
+        local count = 0
+        for token in string.gmatch(data, "([^,]+)") do
+            count = count + 1
+            local stage = _GameManager:GetSyncedAugmentStage(token) + 1
+            self.slotData[count] = {
+                key = token,
+                stage = stage,
+                cost = _BlacksmithConfig:GetAugmentCost(stage),
+            }
+        end
+        if count == 0 then
+            self:ShowEmptyChoice()
+            return
+        end
+
+        -- 칸 수 축소 + 가운데 정렬(잔여 <3종). 표시 슬롯만 켜고 나머지는 끈다.
+        self:AdjustSlotLayout(count)
+
+        self.spinning = true
+        self.spinTime = 0
+        self.spinSlots = {}
+        for i = 1, count do
+            self.spinSlots[i] = {
+                stopAt = self.SpinStopBase + (i - 1) * self.SpinStopGap,
+                stopped = false,
+                reelY = 0,
+            }
+            local e = self.slotEntities[i]
+            if isvalid(e) then
+                -- 실제 아이콘/하단 내용 숨김 + 릴 표시(스핀 중엔 이름/설명/가격/구매 버튼 감춤).
+                if isvalid(self.iconEntities[i]) then self.iconEntities[i].Enable = false end
+                self:SetChildEnable(e, "Name", false)
+                self:SetChildEnable(e, "Desc", false)
+                self:SetChildEnable(e, "Stage", false)
+                self:SetChildEnable(e, "Price", false)
+                if isvalid(self.buyButtons[i]) then self.buyButtons[i].Enable = false end
+                if isvalid(self.reelMasks[i]) then self.reelMasks[i].Enable = true end
+                self:SetReelIconRandom(self.reelIcon1[i])
+                self:SetReelIconRandom(self.reelIcon2[i])
+            end
+        end
+        log("[AugmentManager] spin start (" .. data .. ") count=" .. tostring(count))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void AdjustSlotLayout(integer count)
+        -- 표시 슬롯 수에 맞춰 X 위치를 가운데 정렬로 재배치하고, 나머지 슬롯은 끈다.
+        --   위치 = (i - (count+1)/2) * SlotSpacingX. (count=3 → -300/0/+300, count=2 → -150/+150, count=1 → 0)
+        local maxSlots = _BlacksmithConfig:GetData().augmentChoiceCount
+        for i = 1, maxSlots do
+            local e = self.slotEntities[i]
+            if isvalid(e) then
+                if i <= count then
+                    e.Enable = true
+                    if isvalid(e.UITransformComponent) then
+                        local x = (i - (count + 1) / 2) * self.SlotSpacingX
+                        local baseY = self.slotBaseY[i] or 0
+                        e.UITransformComponent.anchoredPosition = Vector2(x, baseY)
+                    end
+                else
+                    e.Enable = false
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateSpin(number delta)
+        -- 릴 스크롤 + 순차 정지(WeaponShopManager와 동일 수식). 정지 직전 감속(ease-out).
+        self.spinTime = self.spinTime + delta
+        for i = 1, #self.spinSlots do
+            local s = self.spinSlots[i]
+            if s ~= nil and not s.stopped then
+                if self.spinTime >= s.stopAt then
+                    self:StopSlot(i)
+                else
+                    local remain = s.stopAt - self.spinTime
+                    local speedScale = 1.0
+                    if remain < self.ReelSlowdownWindow then
+                        speedScale = math.max(0.25, remain / self.ReelSlowdownWindow)
+                    end
+                    s.reelY = s.reelY - self.ReelSpeed * speedScale * delta
+                    if s.reelY <= -100 then
+                        s.reelY = s.reelY + 100
+                        local i1 = self.reelIcon1[i]
+                        local i2 = self.reelIcon2[i]
+                        if isvalid(i1) and isvalid(i2)
+                            and isvalid(i1.SpriteGUIRendererComponent) and isvalid(i2.SpriteGUIRendererComponent) then
+                            i1.SpriteGUIRendererComponent.ImageRUID = i2.SpriteGUIRendererComponent.ImageRUID
+                        end
+                        self:SetReelIconRandom(i2)
+                    end
+                    local i1 = self.reelIcon1[i]
+                    local i2 = self.reelIcon2[i]
+                    if isvalid(i1) and isvalid(i1.UITransformComponent) then
+                        local p = i1.UITransformComponent.anchoredPosition
+                        i1.UITransformComponent.anchoredPosition = Vector2(p.x, s.reelY)
+                    end
+                    if isvalid(i2) and isvalid(i2.UITransformComponent) then
+                        local p = i2.UITransformComponent.anchoredPosition
+                        i2.UITransformComponent.anchoredPosition = Vector2(p.x, s.reelY + 100)
+                    end
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StopSlot(integer index)
+        -- 릴 정지: 확정 증강 렌더(아이콘/이름/설명/단계/가격/구매버튼) + 정지음 + 아이콘 펀치.
+        local s = self.spinSlots[index]
+        if s == nil or s.stopped then return end
+        s.stopped = true
+        if isvalid(self.reelMasks[index]) then self.reelMasks[index].Enable = false end
+        if isvalid(self.iconEntities[index]) then self.iconEntities[index].Enable = true end
+
+        local sd = self.slotData[index]
+        if sd ~= nil then self:RenderSlotAt(index, sd) end
+        _SoundService:PlaySound(self.reelStopSoundRUID, self.sfxVolume)
+        self:PlayPunch(index)
+        log("[AugmentManager] slot" .. tostring(index) .. " stop key=" .. (sd ~= nil and sd.key or "?"))
+
+        -- 전 슬롯 정지 → 스핀 종료.
+        local allStopped = true
+        for k = 1, #self.spinSlots do
+            if self.spinSlots[k] ~= nil and not self.spinSlots[k].stopped then allStopped = false end
+        end
+        if allStopped then
+            self.spinning = false
+            log("[AugmentManager] spin done")
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void FinishSpinInstant()
+        -- 스핀 도중 화면 숨김 → 연출 생략, 즉시 확정 상태로 정리.
+        if self.spinSlots ~= nil then
+            for i = 1, #self.spinSlots do
+                local s = self.spinSlots[i]
+                if s ~= nil and not s.stopped then
+                    s.stopped = true
+                    if isvalid(self.reelMasks[i]) then self.reelMasks[i].Enable = false end
+                    if isvalid(self.iconEntities[i]) then self.iconEntities[i].Enable = true end
+                    local sd = self.slotData[i]
+                    if sd ~= nil then self:RenderSlotAt(i, sd) end
+                end
+            end
+        end
+        self.spinning = false
+        self:ResetFXEntities()
+        log("[AugmentManager] spin finished instantly (hidden)")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void RenderSlotAt(integer index, any sd)
+        -- 슬롯 1개 확정 렌더: 아이콘/이름/설명/도달 단계/가격 + 하단 내용 표시.
+        local slot = self.slotEntities[index]
+        if not isvalid(slot) then return end
+        local def = _BlacksmithConfig:GetAugment(sd.key)
+        if def == nil then return end
+
+        -- 아이콘(증강 아이콘은 plain 스프라이트 → thumbnail:// 접두사 없이 직접 설정).
+        local icon = self.iconEntities[index]
+        if isvalid(icon) and isvalid(icon.SpriteGUIRendererComponent) then
+            icon.SpriteGUIRendererComponent.ImageRUID = def.icon
+        end
+        self:SetChildText(slot, "Name", def.name)
+        self:SetChildText(slot, "Desc", def.desc)
+        self:SetChildText(slot, "Stage", tostring(sd.stage) .. "단계")
+        self:SetChildText(slot, "Price", self:Comma(sd.cost) .. " Meso")
+        self:SetChildEnable(slot, "Name", true)
+        self:SetChildEnable(slot, "Desc", true)
+        self:SetChildEnable(slot, "Stage", true)
+        self:SetChildEnable(slot, "Price", true)
+        if isvalid(self.buyButtons[index]) then self.buyButtons[index].Enable = true end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void RefreshChoiceView()
+        -- 정지한 각 슬롯의 구매 버튼을 메소 감당 가능 여부로 활성/흐림 처리(매 프레임, 메소 변화 대응).
+        if self.slotData == nil then return end
+        for i = 1, #self.slotData do
+            local sd = self.slotData[i]
+            local btn = self.buyButtons[i]
+            if sd ~= nil and isvalid(btn) and isvalid(self.slotEntities[i]) and self.slotEntities[i].Enable then
+                -- btn은 엔티티 — 클릭 비활성은 ButtonComponent.Enable로, 흐림은 스프라이트 색 알파로.
+                local canAfford = _GameManager.Meso >= sd.cost
+                if isvalid(btn.ButtonComponent) then btn.ButtonComponent.Enable = canAfford end
+                local sprite = btn.SpriteGUIRendererComponent
+                if isvalid(sprite) then
+                    local a = canAfford and 1.0 or 0.35
+                    sprite.Color = Color(0.30, 0.72, 0.34, a)
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void PlayPunch(integer index)
+        -- 정지 순간 아이콘 펀치 스케일(1.15 → 1.0).
+        if self.fxSlots == nil then self.fxSlots = {} end
+        self.fxSlots[index] = { punchT = 0, punchScale = 1.15 }
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateFX(number delta)
+        -- 아이콘 펀치 스케일 복귀.
+        if self.fxSlots == nil then return end
+        for i = 1, #self.slotEntities do
+            local fx = self.fxSlots[i]
+            if fx ~= nil then
+                fx.punchT = fx.punchT + delta
+                local icon = self.iconEntities[i]
+                if isvalid(icon) and isvalid(icon.UITransformComponent) then
+                    local sc = 1.0
+                    if fx.punchT < self.PunchDuration then
+                        sc = fx.punchScale - (fx.punchScale - 1.0) * (fx.punchT / self.PunchDuration)
+                    end
+                    icon.UITransformComponent.UIScale = Vector3(sc, sc, 1)
+                end
+                if fx.punchT >= self.PunchDuration then self.fxSlots[i] = nil end
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ResetFXEntities()
+        -- 릴/펀치 상태 초기화(숨김).
+        local maxSlots = _BlacksmithConfig:GetData().augmentChoiceCount
+        for i = 1, maxSlots do
+            if self.reelMasks ~= nil and isvalid(self.reelMasks[i]) then self.reelMasks[i].Enable = false end
+            if self.iconEntities ~= nil and isvalid(self.iconEntities[i])
+                and isvalid(self.iconEntities[i].UITransformComponent) then
+                self.iconEntities[i].UITransformComponent.UIScale = Vector3(1, 1, 1)
+            end
+        end
+        self.fxSlots = {}
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SetReelIconRandom(any iconEntity)
+        -- 릴 아이콘에 무작위 증강 아이콘을 설정(연출용 — plain 스프라이트라 접두사 없음).
+        if not isvalid(iconEntity) then return end
+        local d = _BlacksmithConfig:GetData()
+        local order = d.augmentOrder
+        local def = d.augments[order[_UtilLogic:RandomIntegerRange(1, #order)]]
+        if def ~= nil and isvalid(iconEntity.SpriteGUIRendererComponent) then
+            iconEntity.SpriteGUIRendererComponent.ImageRUID = def.icon
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnBuyClicked(integer index)
+        -- 구매: 메소 부족이면 클라 선차단(에러음+흔들림), 충분하면 서버 구매 요청(서버가 재검증·차감·재추첨).
+        if self.spinning then return end
+        local sd = self.slotData[index]
+        if sd == nil then return end
+        if _GameManager.Meso < sd.cost then
+            _SoundService:PlaySound(self.errorSoundRUID, self.sfxVolume)
+            self.shakeTime = 0.5
+            log("[AugmentManager] buy blocked (no meso): " .. sd.key .. " cost=" .. tostring(sd.cost))
+            return
+        end
+        _SoundService:PlaySound(self.successSoundRUID, self.sfxVolume)
+        _GameManager:RequestSelectAugment(sd.key)
+        -- 구매 성공 시 서버가 AugmentsData/AugmentChoicesData를 갱신 → OnUpdate가 재추첨 스핀을 시작한다.
+        log("[AugmentManager] request buy augment: " .. sd.key)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnCloseClicked()
+        -- X → 페이지 닫기.
+        _SoundService:PlaySound(self.clickSoundRUID, self.sfxVolume)
+        self:Close()
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnOwnedClicked()
+        -- '보유 증강' → 보유 목록 열기(3택 창 위 오버레이).
+        _SoundService:PlaySound(self.clickSoundRUID, self.sfxVolume)
+        self:RenderOwnedView()
+        if isvalid(self.ownedView) then self.ownedView.Enable = true end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnCloseOwnedClicked()
+        -- 보유 목록 X → 닫고 3택 창으로 복귀.
+        _SoundService:PlaySound(self.clickSoundRUID, self.sfxVolume)
+        if isvalid(self.ownedView) then self.ownedView.Enable = false end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void RenderOwnedView()
+        -- 보유 증강 목록 렌더: 행별 아이콘 + 이름 + 단계 + 한 줄 효과(수치 미표기). 미보유 시 안내.
+        --   보유 데이터는 @Sync AugmentsData("key:stage,...") 파싱(GetSyncedAugmentStage 패턴).
+        local d = _BlacksmithConfig:GetData()
+        local order = d.augmentOrder
+        local row = 0
+        for _, key in ipairs(order) do
+            local stage = _GameManager:GetSyncedAugmentStage(key)
+            if stage > 0 then
+                row = row + 1
+                local def = d.augments[key]
+                local rowEntity = self.ownedView:GetChildByName("Row" .. tostring(row), true)
+                if isvalid(rowEntity) and def ~= nil then
+                    rowEntity.Enable = true
+                    local icon = rowEntity:GetChildByName("Icon", false)
+                    if isvalid(icon) and isvalid(icon.SpriteGUIRendererComponent) then
+                        icon.SpriteGUIRendererComponent.ImageRUID = def.icon
+                    end
+                    self:SetChildText(rowEntity, "Name", def.name .. " " .. tostring(stage) .. "단계")
+                    self:SetChildText(rowEntity, "Desc", def.desc)
+                end
+            end
+        end
+        -- 남는 행 숨김.
+        local maxRows = #order
+        for r = row + 1, maxRows do
+            local rowEntity = self.ownedView:GetChildByName("Row" .. tostring(r), true)
+            if isvalid(rowEntity) then rowEntity.Enable = false end
+        end
+        if isvalid(self.emptyOwnedText) then
+            self.emptyOwnedText.Entity.Enable = row == 0
+        end
+    end
+
+    method string Comma(integer n)
+        -- 천 단위 콤마 문자열.
+        local s = tostring(n)
+        local out = ""
+        local cnt = 0
+        for i = #s, 1, -1 do
+            out = string.sub(s, i, i) .. out
+            cnt = cnt + 1
+            if cnt % 3 == 0 and i > 1 then out = "," .. out end
+        end
+        return out
+    end
+
+    method void SetChildText(any parent, string childName, string text)
+        -- 자식 TextGUIRendererComponent.Text 설정(없으면 무시).
+        --   ⚠ 최신 UIBuilder는 TextComponent가 아니라 TextGUIRendererComponent를 생성한다(상점 UI는 구버전 TextComponent).
+        local c = parent:GetChildByName(childName, false)
+        if isvalid(c) and isvalid(c.TextGUIRendererComponent) then
+            c.TextGUIRendererComponent.Text = text
+        end
+    end
+
+    method void SetChildEnable(any parent, string childName, boolean enabled)
+        -- 자식 엔티티 Enable 토글(없으면 무시).
+        local c = parent:GetChildByName(childName, false)
+        if isvalid(c) then c.Enable = enabled end
+    end
+end

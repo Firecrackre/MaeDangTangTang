@@ -39,9 +39,10 @@
 - 2단계: 12,500 메소
 - 3단계: 20,000 메소
 
-> ⚠ **구현 미반영 (다음 세션 예정 — 2·3단계 작업)** — 현재 구현은 골드 구매 방식이 아니라 **상환 단계 도달 시 무료 3택 제공** 방식이다
-> (`GameManager.RequestSettleDebt` 성공 → `RollAugmentChoices` → `RequestSelectAugment(key)`, 비용 없음).
-> 구매 비용(7,500/12,500/20,000)과 상시 진입형 UI는 아직 코드에 반영되지 않았다. 무료 3택 완전 제거 + 골드 구매형 전환은 확정된 방침이며 다음 세션에서 구현한다.
+> ✔ **구현 완료** — 골드 구매형으로 전환됨. 로비 '대장 기술' 버튼 → `_AugmentManager:Open()` → 3택 창(상시 진입).
+> 각 증강 하단의 구매 골드를 지불해 즉시 획득한다(`GameManager.RequestSelectAugment(key)`가 도달 단계 기준 비용을 검증·차감).
+> 비용 = 도달할 단계 기준 **1단계 7,500 / 2단계 12,500 / 3단계 20,000**(`BlacksmithConfig.augmentCosts` → `GetAugmentCost(stage)`).
+> 무료 3택은 폐지 — `RequestSettleDebt`에서 `RollAugmentChoices` 호출 제거, 대신 `ResetSession`에서 1회 롤 + 구매 성공 시 재추첨.
 
 ---
 
@@ -70,9 +71,10 @@
 4. 플레이어가 한 개의 대장 기술을 업그레이드 완료하면, 창이 새로고침된다.
    - 4-1. 업그레이드를 하지 않고 UI를 퇴장 후 재진입 시 창이 새로고침되지 않고 그대로 남는다.
 
-> ⚠ **구현 미반영 (다음 세션 예정 — 2·3단계 작업)** — 현재 구현(`RollAugmentChoices`)은 "3단계 소진 증강 제외 + 무작위 3택"까지만 구현되어 있다.
-> 잔여 ≤3종 전부 등장·빈 칸 처리·구매 완료 시 새로고침·미구매 퇴장 후 재진입 시 유지 규칙은
-> 구매형 상시 UI(§3)를 전제로 하므로 아직 반영되지 않았다. `AugmentGroup.ui` + `AugmentManager.mlua` 신규 제작과 함께 다음 세션에서 구현한다.
+> ✔ **구현 완료** (`ui/AugmentGroup.ui` + `RootDesk/MyDesk/Augment/AugmentManager.mlua`) — 3택 슬롯머신 스핀 창.
+> 잔여 ≤3종 전부 등장 + **잔여 2종 이하는 UI 칸 수 자체를 축소하고 가운데 정렬**(유저 확정: §4-3-1의 "빈 칸" 규칙 대체) /
+> 구매 완료 시 창 새로고침(`RequestSelectAugment` 성공 → `RollAugmentChoices` 재추첨 → 클라 재스핀) /
+> 미구매 퇴장 후 재진입 시 스핀 없이 유지(`lastChoicesData`/`lastOwnedData` 에지 감지). 전 증강 3단계 소진 시 "모든 대장 기술을 마스터했습니다" 안내.
 
 ---
 

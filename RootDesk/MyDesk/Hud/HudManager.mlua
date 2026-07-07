@@ -264,7 +264,8 @@ script HudManager extends Logic
     @ExecSpace("ClientOnly")
     method boolean WantLoanPopup()
         -- 대출 유도 팝업을 띄울 상황인가:
-        --   스크래치 화면(아이템 보유) → 이상한 큐브 살 돈이 모자람.
+        --   스크래치 화면(아이템 보유, 큐브 미사용) → 이상한 큐브 살 돈이 모자람.
+        --   큐브 사용 후(결과 보유)에는 판매로 회생 가능하므로 띄우지 않는다.
         --   상점 화면(ActiveScreen=="shop", 미보유) → 상점 무기 3슬롯을 전부 살 수 없음.
         --   재정 관리 화면에서는 띄우지 않는다.
         --   게임오버 시에는 사슬 연출(weapon/cube) 동안만 강제 표시(forceLoanPopup).
@@ -272,6 +273,8 @@ script HudManager extends Logic
         local screen = isvalid(_LobbyManager) and _LobbyManager.ActiveScreen or "lobby"
         if screen == "finance" then return false end
         if _GameManager.CurrentItemId ~= "" then
+            -- 큐브를 이미 사용해 결과가 나온 상태면 판매로 회생 가능 → 대출 유도 안 함(위기 상황 아님).
+            if _GameManager.HasPotential then return false end
             local weird = _BlacksmithConfig:GetCube("weird")
             local cost = (weird ~= nil) and weird.cost or 0
             return _GameManager.Meso < cost

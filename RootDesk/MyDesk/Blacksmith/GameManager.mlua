@@ -37,6 +37,9 @@ script GameManager extends Logic
     @Sync property string CurrentResultType = ""     -- 조합 판정 결과(연출용 RAW 문자열)
     @Sync property integer CurrentPrice = 0          -- 현재 예상 판매가(파괴 시 0)
     @Sync property boolean IsCurrentDestroyed = false -- 현재 아이템 파괴 여부 (flow §14)
+    -- 현재 판매가가 어떤 계산으로 나왔는지 사람이 읽는 수식 문자열(디버그/로그용). 파괴 시 "".
+    --   서버가 RequestUseCube에서 PricingCalculator breakdown으로 1회 조립 → @Sync로 클라(스크래치 로그)에 전달.
+    @Sync property string CurrentPriceFormula = ""
 
     -- 잠재 결과 전체(등급+옵션 3줄). 중첩 테이블이라 @Sync 불가 → 서버 권위 보관용.
     property any CurrentPotential = nil
@@ -118,6 +121,7 @@ script GameManager extends Logic
         self:UpdateRepaymentCountdown()  -- 시작 시 '다음 상환까지 남은 큐브' 표시 (flow §5-4)
         self:ResetPotentialState()
         self:RollShop()  -- 시작 시 상점 슬롯 구성 (concept §6-1)
+        self:RollAugmentChoices()  -- 시작부터 대장 기술 3택 준비(구매형 상시 진입). blacksmith_upgrade.md §4
         self:UpdateCanLoan()
     end
 
@@ -319,8 +323,11 @@ script GameManager extends Logic
         pr.baseOverride = self.CurrentBasePrice
         local calc = _PricingCalculator:Calculate(self.CurrentItemId, pr)
         -- 증강 '위험 거래': 판매가 % 증가(파괴가 아닐 때만). (Phase 8)
+        -- 계산식 로그용: riskyDeal 적용 전 가격(prePrice)과 증가율(riskPct)을 캡처해 둔다.
+        local prePrice = calc.price
+        local riskPct = 0
         if not calc.destroyed then
-            local riskPct = self:GetAugmentStageValueFor("riskyDeal")
+            riskPct = self:GetAugmentStageValueFor("riskyDeal")
             if riskPct > 0 then
                 calc.price = math.floor((calc.price * (1 + riskPct / 100)) / 1000 + 0.5) * 1000
             end
@@ -337,17 +344,42 @@ script GameManager extends Logic
             -- 파괴: 판매가 0, 파괴 상태로 전환. 실제 아이템 제거는 확인(RequestConfirmDestroy) 시. (flow §14)
             self.IsCurrentDestroyed = true
             self.CurrentPrice = 0
+            self.CurrentPriceFormula = ""
             log("[GameManager] cube used -> DESTROYED. item=" .. self.CurrentItemId
                 .. ", cubeCount=" .. tostring(self.CubeUseCount) .. ", meso=" .. tostring(self.Meso))
         else
             self.IsCurrentDestroyed = false
             self.CurrentPrice = calc.price
+            -- 판매가 계산식 문자열 조립(@Sync로 클라 스크래치 로그에 전달).
+            self.CurrentPriceFormula = self:BuildPriceFormula(calc, prePrice, riskPct)
             log("[GameManager] cube used -> grade=" .. pr.grade .. ", type=" .. pr.resultType
                 .. ", price=" .. tostring(calc.price) .. ", cubeCount=" .. tostring(self.CubeUseCount)
                 .. ", meso=" .. tostring(self.Meso))
+            log("[GameManager] price formula: " .. self.CurrentPriceFormula)
         end
         self:UpdateCanLoan()
         self:CheckStuckGameOver()
+    end
+
+    method string BuildPriceFormula(any calc, number prePrice, number riskPct)
+        -- 판매가 계산식을 사람이 읽는 문자열로 조립(디버그/로그용, 파괴 아닐 때만 호출).
+        --   형식: (기본 B + 옵션 O + 조합 C[key]) × 등급 G × 이탈 E = prePrice [× 위험거래(1+R%) = finalPrice]
+        --   수치는 라인 로그와 동일하게 raw. 판매가 공식은 pricing_calculation.md §4.
+        local comboStr = ""
+        if calc.comboBonus ~= nil and calc.comboBonus > 0 then
+            comboStr = " + 조합 " .. tostring(calc.comboBonus)
+            if calc.comboKey ~= nil and calc.comboKey ~= "" then
+                comboStr = comboStr .. "[" .. calc.comboKey .. "]"
+            end
+        end
+        local f = "(기본 " .. tostring(calc.base) .. " + 옵션 " .. tostring(calc.optionBonusSum)
+            .. comboStr .. ") x 등급 " .. tostring(calc.gradeMult)
+            .. " x 이탈 " .. tostring(calc.bonusMult)
+            .. " = " .. tostring(prePrice)
+        if riskPct ~= nil and riskPct > 0 then
+            f = f .. " x 위험거래(1+" .. tostring(riskPct) .. "%) = " .. tostring(calc.price)
+        end
+        return f
     end
 
     @ExecSpace("Server")
@@ -424,6 +456,7 @@ script GameManager extends Logic
         self.CurrentResultType = ""
         self.CurrentPotentialData = ""
         self.CurrentPrice = 0
+        self.CurrentPriceFormula = ""
         self.IsCurrentDestroyed = false
     end
 
@@ -480,8 +513,8 @@ script GameManager extends Logic
                     .. tostring(self.Meso) .. ", cubes=" .. tostring(self.CubeUseCount))
                 return
             end
-            -- 상환 단계 도달 → 대장 기술(증강) 3택 제공 (blacksmith_upgrade.md §9 MVP 트리거, Phase 7).
-            self:RollAugmentChoices()
+            -- (증강은 상환 보상이 아니라 골드 구매형 — RollAugmentChoices는 여기서 호출하지 않는다.
+            --  구매형 전환: 3택은 ResetSession에서 1회 롤 + 구매 성공(RequestSelectAugment) 시 재추첨. blacksmith_upgrade.md §3·§4)
             log("[GameManager] NEXT WEEK: day=" .. tostring(self:GetCurrentDay())
                 .. "주차, nextRepay=" .. tostring(self:GetCurrentRepayment()))
             -- ⚠ 여기서 스턱(weapon) 판정을 하지 않는다 — 판정은 플레이어가 무기 상점 화면을 열어
@@ -671,10 +704,16 @@ script GameManager extends Logic
 
     @ExecSpace("Server")
     method void RequestSelectAugment(string augmentKey)
-        -- 증강 선택: 대기 중 + 서버가 제시한 선택지에 포함된 key만 허용(클라 입력 불신). 중복이면 단계 상승. (§10·§11)
+        -- 증강 구매: 제시된 3택 중 하나를 골드로 구매(도달 단계 기준 비용 차감). 중복이면 단계 상승. (blacksmith_upgrade.md §3·§4)
+        --   클라 입력 불신: 선택지 포함 여부·비용·단계 상한 모두 서버 권위 검증. 구매 성공 시 창을 재추첨한다(§4-4 새로고침).
         if self:IsSessionEnded() then return end
         if not self.IsAugmentPending then
-            log_warning("[GameManager] augment select rejected: none pending")
+            log_warning("[GameManager] augment buy rejected: none pending")
+            return
+        end
+        -- 상환 미납(5/5) 상태면 정산이 우선.
+        if self.IsRepaymentDue then
+            log_warning("[GameManager] augment buy rejected: repayment due (settle first)")
             return
         end
         -- 서버 권위 선택지 검증(위조 차단).
@@ -683,29 +722,36 @@ script GameManager extends Logic
             if token == augmentKey then offered = true break end
         end
         if not offered then
-            log_warning("[GameManager] augment select rejected: '" .. tostring(augmentKey) .. "' not offered")
+            log_warning("[GameManager] augment buy rejected: '" .. tostring(augmentKey) .. "' not offered")
             return
         end
         local def = _BlacksmithConfig:GetAugment(augmentKey)
         if def == nil then
-            log_warning("[GameManager] augment select rejected: unknown '" .. tostring(augmentKey) .. "'")
+            log_warning("[GameManager] augment buy rejected: unknown '" .. tostring(augmentKey) .. "'")
             return
         end
         local maxStage = _BlacksmithConfig:GetData().augmentMaxStage
         local cur = self:GetAugmentStage(augmentKey)
         if cur >= maxStage then
-            log_warning("[GameManager] augment select rejected: already max '" .. augmentKey .. "'")
+            log_warning("[GameManager] augment buy rejected: already max '" .. augmentKey .. "'")
             return
         end
+        -- 구매 비용(도달할 단계 기준) 검증·차감. (blacksmith_upgrade.md §3)
+        local cost = _BlacksmithConfig:GetAugmentCost(cur + 1)
+        if self.Meso < cost then
+            log_warning("[GameManager] augment buy rejected: not enough meso (" .. tostring(self.Meso)
+                .. " < " .. tostring(cost) .. ")")
+            return
+        end
+        self.Meso = self.Meso - cost
         if self.OwnedAugments == nil then self.OwnedAugments = {} end
         self.OwnedAugments[augmentKey] = cur + 1
         self:SerializeAugments()
-        -- 선택 완료 → 대기 해제.
-        self.AugmentChoicesData = ""
-        self.IsAugmentPending = false
         self:UpdateCanLoan()  -- 가격 협상 등 구매가에 영향 → 대출 조건 재평가.
-        log("[GameManager] augment selected: " .. augmentKey .. " -> stage " .. tostring(cur + 1)
-            .. ", owned=" .. self.AugmentsData)
+        log("[GameManager] augment bought: " .. augmentKey .. " -> stage " .. tostring(cur + 1)
+            .. " (-" .. tostring(cost) .. ", meso=" .. tostring(self.Meso) .. "), owned=" .. self.AugmentsData)
+        -- 구매 완료 → 창 새로고침(재추첨). 3단계 소진 증강은 다음 풀에서 제외된다. (§4-4)
+        self:RollAugmentChoices()
     end
 
     -- ═══════════════ 증강 효과 계산 헬퍼 (Phase 8) ═══════════════

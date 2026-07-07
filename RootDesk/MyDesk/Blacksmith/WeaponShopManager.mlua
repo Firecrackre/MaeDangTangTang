@@ -7,6 +7,38 @@ script WeaponShopManager extends Logic
 
 	property number BobSpeed = 2.5
 
+	-- ── 슬롯머신 스핀 연출 튜닝(인스펙터 SSOT — weapon_shop.md §13 표시 연출) ──
+	property number SpinStopBase = 0.9
+
+	property number SpinStopGap = 0.6
+
+	property number ReelSpeed = 700.0
+
+	property number ReelSlowdownWindow = 0.45
+
+	property number FlashDuration = 0.25
+
+	property number PunchDuration = 0.22
+
+	property number SparkleDurationL1 = 0.7
+
+	property number SparkleDurationL2 = 1.0
+
+	property number SparkleDurationL3 = 1.6
+
+	-- ── 반짝 이펙트 리소스(msw-search 확보 RUID) ──
+	property string SparkleClipL1 = "5c7fcd921d7c473780834bf125b897b4"
+
+	property string SparkleClipL2 = "58a7d48901d64cc8a4a5d7c2a6c1174c"
+
+	property string GlitterClip = "c47054942de1445e8a0e9e7aa016a122"
+
+	property string SfxReelStop = "972843e759204d3e9ad84e7d3fa94f83"
+
+	property string SfxSuccess = "b060035abee84543bdd77c69dc7aeab3"
+
+	property string SfxFanfare = "cb270655c69841aabb02b11de9f8a8be"
+
 	property Entity board = "cf3969b5-ae1b-4ca2-961a-cd8d26c03f09"
 
 	property SpriteGUIRendererComponent detailIcon = "3c3a5507-9c1c-45b4-8f4e-ac75002df790"
@@ -49,6 +81,32 @@ script WeaponShopManager extends Logic
 
 	property number bobTime = 0
 
+	-- ── 스핀/이펙트 런타임 상태(연출 전용 — 결과는 서버 @Sync가 SSOT) ──
+	property boolean spinning = false
+
+	property number spinTime = 0
+
+	property any spinSlots = nil
+
+	property any fxSlots = nil
+
+	property boolean augChangedDuringSpin = false
+
+	-- ── 스핀/이펙트 엔티티 캐시(CacheSlots가 채움) ──
+	property any reelMasks = nil
+
+	property any reelIcon1 = nil
+
+	property any reelIcon2 = nil
+
+	property any sparkleFX = nil
+
+	property any sparkleFX2 = nil
+
+	property any burstFX = nil
+
+	property any flashFX = nil
+
 	@ExecSpace("ClientOnly")
 	method void OnBeginPlay()
 		        -- 슬롯/버튼 초기화 → 초기값 취득이 모두 끝난 뒤에 컨테이너를 끈다.
@@ -57,11 +115,18 @@ script WeaponShopManager extends Logic
 		        self.selectedSlot = 0
 		        self.clickHandlers = {}
 		        self.bobTime = 0
-		
-		        -- 슬롯/아이콘 엔티티 캐싱(멱등) + 슬롯 클릭 핸들러 연결(1회).
+		        self.spinning = false
+		        self.spinSlots = {}
+		        self.fxSlots = {}
+
+		        -- 슬롯/아이콘/이펙트 엔티티 캐싱(멱등) + 슬롯 클릭 핸들러 연결(1회).
 		        self:CacheSlots()
 		        self:WireSlotClicks()
-		
+
+		        -- 이펙트 엔티티는 .ui에서 켜진 채 저작(꺼진 엔티티는 GetChildByName 캐시가 빌 수 있음)
+		        -- → 캐싱이 끝난 지금 숨김 상태로 초기화한다.
+		        self:ResetFXEntities()
+
 		        -- 구입/새로고침/뒤로 버튼: ConnectEvent는 Entity에서 호출한다(Component 아님).
 		        if isvalid(self.buyButton) then
 		            self.buyHandler = self.buyButton.Entity:ConnectEvent(ButtonClickEvent, self.OnBuyClicked)
@@ -72,7 +137,7 @@ script WeaponShopManager extends Logic
 		        if isvalid(self.backButton) then
 		            self.backHandler = self.backButton.Entity:ConnectEvent(ButtonClickEvent, self.OnBackClicked)
 		        end
-		
+
 		        self:SetSelectionUI(false)  -- 초기: 미선택 → 중앙 안내 표시 + 구입 비활성
 
 		        -- 게이팅 초기화: 초기 캐싱/배선이 끝난 뒤 상점 보드를 명시적으로 끈다(초기 상태 gotcha 회피).
@@ -83,12 +148,19 @@ script WeaponShopManager extends Logic
 
 	@ExecSpace("ClientOnly")
 	method void CacheSlots()
-		        -- 슬롯/아이콘 엔티티를 (재)캐싱한다(멱등). board가 켜져 있어야 GetChildByName이 자식을 찾는다.
+		        -- 슬롯/아이콘/이펙트 엔티티를 (재)캐싱한다(멱등). board가 켜져 있어야 GetChildByName이 자식을 찾는다.
 		        -- 클릭 핸들러 연결은 여기서 하지 않는다(중복 연결 방지 — WireSlotClicks가 1회만 담당).
 		        -- 슬롯 수는 BlacksmithConfig.shopSlotCount(SSOT). Slot{i}가 없으면 isvalid 가드로 건너뛴다.
 		        self.slotEntities = {}
 		        self.iconEntities = {}
 		        self.iconBaseY = {}
+		        self.reelMasks = {}
+		        self.reelIcon1 = {}
+		        self.reelIcon2 = {}
+		        self.sparkleFX = {}
+		        self.sparkleFX2 = {}
+		        self.burstFX = {}
+		        self.flashFX = {}
 		        if not isvalid(self.board) then return end
 		        local slotCount = _BlacksmithConfig:GetData().shopSlotCount
 		        for i = 1, slotCount do
@@ -100,6 +172,17 @@ script WeaponShopManager extends Logic
 		                if isvalid(icon) and isvalid(icon.UITransformComponent) then
 		                    self.iconBaseY[i] = icon.UITransformComponent.anchoredPosition.y
 		                end
+		                -- 스핀 릴/이펙트 자식 캐싱(ui/WeaponShopGroup.ui의 SlotN 하위).
+		                local rm = e:GetChildByName("ReelMask", false)
+		                self.reelMasks[i] = rm
+		                if isvalid(rm) then
+		                    self.reelIcon1[i] = rm:GetChildByName("ReelIcon1", false)
+		                    self.reelIcon2[i] = rm:GetChildByName("ReelIcon2", false)
+		                end
+		                self.sparkleFX[i] = e:GetChildByName("SparkleFX", false)
+		                self.sparkleFX2[i] = e:GetChildByName("SparkleFX2", false)
+		                self.burstFX[i] = e:GetChildByName("BurstFX", false)
+		                self.flashFX[i] = e:GetChildByName("FlashFX", false)
 		            end
 		        end
 	end
@@ -149,19 +232,24 @@ script WeaponShopManager extends Logic
 		        local showShop = isvalid(lp) and lp.CurrentMapName == self.TargetMapName
 		            and (_GameManager.CurrentItemId == "")
 		            and (_LobbyManager.ActiveScreen == "shop")
-		
+
 		        -- 매 프레임 멱등 적용(초기 프레임/경합 안전). rising edge = 상점 화면이 방금 표시됨.
 		        local justShown = showShop and not self.isActive
 		        if isvalid(self.board) then self.board.Enable = showShop end
 		        self.isActive = showShop
-		        if not showShop then return end
+		        if not showShop then
+		            -- 스핀 도중 화면이 닫히면(로비 복귀/구매 등) 연출 생략하고 확정 상태로 정리해 둔다.
+		            if self.spinning then self:FinishSpinInstant() end
+		            return
+		        end
 
-		        -- 상점 슬롯 데이터 변화 시 재렌더(서버가 ShopSlotsData를 @Sync로 내려준다).
+		        -- 상점 슬롯 데이터 변화 시 슬롯머신 스핀 시작(서버가 ShopSlotsData를 @Sync로 내려준다).
+		        -- 결과는 이미 확정 — 스핀은 표시 연출일 뿐이다. 재입장(데이터 불변)은 스핀 없이 기존 렌더 유지.
 		        local data = _GameManager.ShopSlotsData
 		        local slotsChanged = data ~= self.lastShopData
 		        if slotsChanged then
 		            self.lastShopData = data
-		            self:RenderShop(data)
+		            self:StartSpin(data)
 		        end
 
 		        -- 상점 화면 표시/재추첨 시점에만 서버 스턱 판정 요청(로비에서는 판정 안 함 — 유저 확정).
@@ -169,38 +257,377 @@ script WeaponShopManager extends Logic
 		        if justShown or slotsChanged then
 		            _GameManager:RequestShopStuckCheck()
 		        end
-		
+
 		        -- 증강(가격 협상 등) 변화 시 슬롯 구매가 재갱신 — 실효 구매가가 바뀌므로 재렌더한다.
+		        -- 단, 스핀 중이면 릴을 덮어쓰지 않도록 보류하고 스핀 종료 시점에 일괄 재렌더한다.
 		        local aug = _GameManager.AugmentsData
 		        if aug ~= self.lastAugmentData then
 		            self.lastAugmentData = aug
-		            self:RenderShop(_GameManager.ShopSlotsData)
+		            if self.spinning then
+		                self.augChangedDuringSpin = true
+		            else
+		                self:RenderShop(_GameManager.ShopSlotsData)
+		            end
 		        end
-		
+
 		        -- 소유 메소 변화로 구매 가능 여부가 바뀔 수 있으므로, 선택 중이면 구입 버튼을 재평가한다.
 		        if self.selectedSlot >= 1 then
 		            self:SetBuyEnabled(self:CanAffordSelected())
 		        end
-		
+
+		        -- 스핀(릴 스크롤·순차 정지)과 정지 이펙트(플래시/펀치/반짝) 진행.
+		        if self.spinning then
+		            self:UpdateSpin(delta)
+		        end
+		        self:UpdateFX(delta)
+
 		        -- 슬롯 아이콘 둥둥 떠다니기(상점이 보일 때만 매 프레임 갱신).
 		        self.bobTime = self.bobTime + delta
 		        self:AnimateIcons()
 	end
 
 	@ExecSpace("ClientOnly")
+	method boolean IsSlotSpinning(integer index)
+		        -- 해당 슬롯이 아직 릴을 돌리고 있는지(스핀 중 + 미정지).
+		        if not self.spinning or self.spinSlots == nil then return false end
+		        local s = self.spinSlots[index]
+		        return s ~= nil and not s.stopped
+	end
+
+	@ExecSpace("ClientOnly")
+	method void StartSpin(string data)
+		        -- 새 추첨 도착 → 슬롯머신 스핀 시작(연출 전용 — 결과는 서버 확정 데이터).
+		        -- 위(1)→아래(3) 순차 정지. 스핀 중 슬롯 클릭/구매는 가드된다(새로고침은 허용 — 재스핀).
+		        if self.slotEntities == nil or #self.slotEntities == 0 then self:CacheSlots() end
+		        self.selectedSlot = 0
+		        self:SetSelectionUI(false)
+		        self:ResetFXEntities()
+
+		        -- 최종 결과 파싱(정지 시 슬롯별 렌더에 사용). RenderShop과 동일 포맷 "equipId:grade,...".
+		        self.slotData = {}
+		        local count = 0
+		        if data ~= nil and data ~= "" then
+		            for token in string.gmatch(data, "([^,]+)") do
+		                count = count + 1
+		                self.slotData[count] = {
+		                    equipId = string.match(token, "([^:]+):"),
+		                    grade = string.match(token, ":([^:]+)"),
+		                }
+		            end
+		        end
+		        if count == 0 then
+		            -- 빈 상점(방어): 스핀 없이 기존 렌더 경로로.
+		            self.spinning = false
+		            self:RenderShop(data)
+		            return
+		        end
+
+		        self.spinning = true
+		        self.spinTime = 0
+		        self.augChangedDuringSpin = false
+		        self.spinSlots = {}
+		        local slotCount = _BlacksmithConfig:GetData().shopSlotCount
+		        for i = 1, slotCount do
+		            self.spinSlots[i] = {
+		                stopAt = self.SpinStopBase + (i - 1) * self.SpinStopGap,
+		                stopped = false,
+		                reelY = 0,
+		            }
+		            local e = self.slotEntities[i]
+		            if isvalid(e) then
+		                -- 실제 아이콘/텍스트 숨김 + 릴 표시.
+		                if isvalid(self.iconEntities[i]) then self.iconEntities[i].Enable = false end
+		                self:SetChildText(e, "Name", "???")
+		                self:SetChildText(e, "Price", "")
+		                self:SetChildText(e, "SellValue", "")
+		                if isvalid(self.reelMasks[i]) then self.reelMasks[i].Enable = true end
+		                self:SetReelIconRandom(self.reelIcon1[i])
+		                self:SetReelIconRandom(self.reelIcon2[i])
+		            end
+		        end
+		        log("[Spin] start (" .. data .. ")")
+	end
+
+	@ExecSpace("ClientOnly")
+	method void UpdateSpin(number delta)
+		        -- 릴 스크롤 + 순차 정지. 정지 직전 감속(ease-out) 후 StopSlot이 확정 렌더를 담당한다.
+		        self.spinTime = self.spinTime + delta
+		        local slotCount = _BlacksmithConfig:GetData().shopSlotCount
+		        for i = 1, slotCount do
+		            local s = self.spinSlots[i]
+		            if s ~= nil and not s.stopped then
+		                if self.spinTime >= s.stopAt then
+		                    self:StopSlot(i)
+		                else
+		                    local remain = s.stopAt - self.spinTime
+		                    local speedScale = 1.0
+		                    if remain < self.ReelSlowdownWindow then
+		                        speedScale = math.max(0.25, remain / self.ReelSlowdownWindow)
+		                    end
+		                    s.reelY = s.reelY - self.ReelSpeed * speedScale * delta
+		                    if s.reelY <= -100 then
+		                        s.reelY = s.reelY + 100
+		                        -- 아래로 빠진 칸을 위로 재활용: 1번이 2번 그림을 물려받고 2번은 새 무작위 아이콘.
+		                        local i1 = self.reelIcon1[i]
+		                        local i2 = self.reelIcon2[i]
+		                        if isvalid(i1) and isvalid(i2)
+		                            and isvalid(i1.SpriteGUIRendererComponent) and isvalid(i2.SpriteGUIRendererComponent) then
+		                            i1.SpriteGUIRendererComponent.ImageRUID = i2.SpriteGUIRendererComponent.ImageRUID
+		                        end
+		                        self:SetReelIconRandom(i2)
+		                        -- 릴이 한 칸 넘어갈 때마다 슬롯 배경을 무작위 등급색으로 틴트(도는 느낌 강화).
+		                        self:TintSlotRandomGrade(i)
+		                    end
+		                    local i1 = self.reelIcon1[i]
+		                    local i2 = self.reelIcon2[i]
+		                    if isvalid(i1) and isvalid(i1.UITransformComponent) then
+		                        local p = i1.UITransformComponent.anchoredPosition
+		                        i1.UITransformComponent.anchoredPosition = Vector2(p.x, s.reelY)
+		                    end
+		                    if isvalid(i2) and isvalid(i2.UITransformComponent) then
+		                        local p = i2.UITransformComponent.anchoredPosition
+		                        i2.UITransformComponent.anchoredPosition = Vector2(p.x, s.reelY + 100)
+		                    end
+		                end
+		            end
+		        end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void StopSlot(integer index)
+		        -- 릴 정지: 확정 데이터 렌더 복귀 + 정지음 + 등급 반짝 이펙트(L1/L2/L3).
+		        local s = self.spinSlots[index]
+		        if s == nil or s.stopped then return end
+		        s.stopped = true
+		        if isvalid(self.reelMasks[index]) then self.reelMasks[index].Enable = false end
+		        if isvalid(self.iconEntities[index]) then self.iconEntities[index].Enable = true end
+
+		        local sd = nil
+		        if self.slotData ~= nil then sd = self.slotData[index] end
+		        local fxLevel = 0
+		        local gradeLabel = "?"
+		        if sd ~= nil then
+		            self:RenderSlot(index, sd.equipId, sd.grade)  -- 배경 등급색/이름/가격 복원(기존 경로 재사용)
+		            fxLevel = self:GetSparkleLevel(sd.grade)
+		            gradeLabel = sd.grade
+		        end
+		        _SoundService:PlaySound(self.SfxReelStop, 1)
+		        self:PlayStopFX(index, fxLevel)
+		        log("[Spin] slot" .. tostring(index) .. " stop grade=" .. gradeLabel .. " fx=L" .. tostring(fxLevel))
+
+		        -- 전 슬롯 정지 → 스핀 종료(클릭/구매 가드 해제).
+		        local slotCount = _BlacksmithConfig:GetData().shopSlotCount
+		        local allStopped = true
+		        for k = 1, slotCount do
+		            if self.spinSlots[k] ~= nil and not self.spinSlots[k].stopped then allStopped = false end
+		        end
+		        if allStopped then
+		            self.spinning = false
+		            if self.augChangedDuringSpin then
+		                -- 스핀 중 증강이 바뀌었으면(이론상 드묾) 최신 실효 구매가로 일괄 재렌더.
+		                self:RenderShop(self.lastShopData)
+		            end
+		            log("[Spin] done")
+		        end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void FinishSpinInstant()
+		        -- 상점이 스핀 도중 숨겨짐(로비 복귀 등) → 연출 생략하고 즉시 확정 상태로 정리.
+		        local slotCount = _BlacksmithConfig:GetData().shopSlotCount
+		        for i = 1, slotCount do
+		            local s = nil
+		            if self.spinSlots ~= nil then s = self.spinSlots[i] end
+		            if s ~= nil and not s.stopped then
+		                s.stopped = true
+		                if isvalid(self.reelMasks[i]) then self.reelMasks[i].Enable = false end
+		                if isvalid(self.iconEntities[i]) then self.iconEntities[i].Enable = true end
+		                local sd = nil
+		                if self.slotData ~= nil then sd = self.slotData[i] end
+		                if sd ~= nil then self:RenderSlot(i, sd.equipId, sd.grade) end
+		            end
+		        end
+		        self.spinning = false
+		        self:ResetFXEntities()
+		        log("[Spin] finished instantly (shop hidden)")
+	end
+
+	@ExecSpace("ClientOnly")
+	method integer GetSparkleLevel(string grade)
+		        -- 반짝 티어 판정(유저 확정 규칙): 현재 상점 확률표에 레전더리가 열려 있으면(>0)
+		        --   유니크=L2 / 레전더리=L3(에픽은 일반 등장), 닫혀 있으면(0~1단계) 에픽=L1 / 유니크=L2.
+		        -- 표는 증강 '더 좋은 물품' 단계 기준 — @Sync AugmentsData 파싱이라 클라에서도 서버와 동일 계산.
+		        local stage = _GameManager:GetSyncedAugmentStage("betterGoods")
+		        local probTable = _BlacksmithConfig:GetShopGradeProbTable(stage)
+		        local legendaryOpen = probTable.Legendary ~= nil and probTable.Legendary > 0
+		        if legendaryOpen then
+		            if grade == "Legendary" then return 3 end
+		            if grade == "Unique" then return 2 end
+		        else
+		            if grade == "Unique" then return 2 end
+		            if grade == "Epic" then return 1 end
+		        end
+		        return 0
+	end
+
+	@ExecSpace("ClientOnly")
+	method void PlayStopFX(integer index, integer level)
+		        -- 정지 순간 연출: 공통 플래시/아이콘 펀치 + 티어별 반짝.
+		        --   L1 = 별 팝 / L2 = 별 링 버스트(강화 성공풍) + 파티클 + 성공음 / L3 = L2 대형 + 글리터 필드 + 팡파레.
+		        if self.fxSlots == nil then self.fxSlots = {} end
+		        local fx = { flashT = 0, flashPeak = 0.35, punchT = 0, punchScale = 1.06, sparkleT = -1, sparkleDur = 0 }
+		        if level == 1 then
+		            fx.flashPeak = 0.55
+		            fx.punchScale = 1.12
+		            fx.sparkleT = 0
+		            fx.sparkleDur = self.SparkleDurationL1
+		            self:SetSparkleClip(index, self.SparkleClipL1, 150)
+		        elseif level == 2 then
+		            fx.flashPeak = 0.8
+		            fx.punchScale = 1.2
+		            fx.sparkleT = 0
+		            fx.sparkleDur = self.SparkleDurationL2
+		            self:SetSparkleClip(index, self.SparkleClipL2, 210)
+		            if isvalid(self.burstFX[index]) then self.burstFX[index].Enable = true end
+		            _SoundService:PlaySound(self.SfxSuccess, 1)
+		        elseif level == 3 then
+		            fx.flashPeak = 1.0
+		            fx.punchScale = 1.3
+		            fx.sparkleT = 0
+		            fx.sparkleDur = self.SparkleDurationL3
+		            self:SetSparkleClip(index, self.SparkleClipL2, 280)
+		            if isvalid(self.sparkleFX2[index]) then self.sparkleFX2[index].Enable = true end
+		            if isvalid(self.burstFX[index]) then self.burstFX[index].Enable = true end
+		            _SoundService:PlaySound(self.SfxFanfare, 1)
+		        end
+		        if fx.sparkleT >= 0 and isvalid(self.sparkleFX[index]) then
+		            self.sparkleFX[index].Enable = true
+		        end
+		        self.fxSlots[index] = fx
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetSparkleClip(integer index, string ruid, number size)
+		        -- 반짝 오버레이에 animationclip을 설정하고 크기를 티어에 맞춘다.
+		        --   animationclip RUID는 접두사 없이 ImageRUID에 직접 설정해야 재생된다(thumbnail://은 정지 썸네일).
+		        local e = self.sparkleFX[index]
+		        if not isvalid(e) then return end
+		        if isvalid(e.SpriteGUIRendererComponent) then
+		            e.SpriteGUIRendererComponent.ImageRUID = ruid
+		        end
+		        if isvalid(e.UITransformComponent) then
+		            e.UITransformComponent.RectSize = Vector2(size, size)
+		        end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void UpdateFX(number delta)
+		        -- 정지/반짝 연출 타이머: 플래시 페이드, 아이콘 펀치 스케일 복귀, 반짝 지속시간 후 숨김.
+		        if self.fxSlots == nil then return end
+		        local slotCount = _BlacksmithConfig:GetData().shopSlotCount
+		        for i = 1, slotCount do
+		            local fx = self.fxSlots[i]
+		            if fx ~= nil then
+		                -- 플래시: 정지 순간 peak → FlashDuration 동안 선형 페이드아웃.
+		                fx.flashT = fx.flashT + delta
+		                local flash = self.flashFX[i]
+		                if isvalid(flash) and isvalid(flash.SpriteGUIRendererComponent) then
+		                    local a = 0
+		                    if fx.flashT < self.FlashDuration then
+		                        a = fx.flashPeak * (1 - fx.flashT / self.FlashDuration)
+		                    end
+		                    flash.SpriteGUIRendererComponent:SetAlpha(a)
+		                end
+		                -- 펀치: 아이콘 스케일 punchScale → 1.0 복귀.
+		                fx.punchT = fx.punchT + delta
+		                local icon = self.iconEntities[i]
+		                if isvalid(icon) and isvalid(icon.UITransformComponent) then
+		                    local sc = 1.0
+		                    if fx.punchT < self.PunchDuration then
+		                        sc = fx.punchScale - (fx.punchScale - 1.0) * (fx.punchT / self.PunchDuration)
+		                    end
+		                    icon.UITransformComponent.UIScale = Vector3(sc, sc, 1)
+		                end
+		                -- 반짝: 지속시간 경과 시 오버레이/파티클 숨김.
+		                if fx.sparkleT >= 0 then
+		                    fx.sparkleT = fx.sparkleT + delta
+		                    if fx.sparkleT >= fx.sparkleDur then
+		                        if isvalid(self.sparkleFX[i]) then self.sparkleFX[i].Enable = false end
+		                        if isvalid(self.sparkleFX2[i]) then self.sparkleFX2[i].Enable = false end
+		                        if isvalid(self.burstFX[i]) then self.burstFX[i].Enable = false end
+		                        fx.sparkleT = -1
+		                    end
+		                end
+		                -- 모든 연출 종료 → 상태 제거.
+		                if fx.flashT >= self.FlashDuration and fx.punchT >= self.PunchDuration and fx.sparkleT < 0 then
+		                    self.fxSlots[i] = nil
+		                end
+		            end
+		        end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ResetFXEntities()
+		        -- 스핀/반짝 연출 엔티티를 기본(숨김) 상태로 되돌린다(OnBeginPlay 초기화 + 스핀 시작 시).
+		        local slotCount = _BlacksmithConfig:GetData().shopSlotCount
+		        for i = 1, slotCount do
+		            if self.reelMasks ~= nil and isvalid(self.reelMasks[i]) then self.reelMasks[i].Enable = false end
+		            if self.sparkleFX ~= nil and isvalid(self.sparkleFX[i]) then self.sparkleFX[i].Enable = false end
+		            if self.sparkleFX2 ~= nil and isvalid(self.sparkleFX2[i]) then self.sparkleFX2[i].Enable = false end
+		            if self.burstFX ~= nil and isvalid(self.burstFX[i]) then self.burstFX[i].Enable = false end
+		            if self.flashFX ~= nil and isvalid(self.flashFX[i])
+		                and isvalid(self.flashFX[i].SpriteGUIRendererComponent) then
+		                self.flashFX[i].SpriteGUIRendererComponent:SetAlpha(0)
+		            end
+		            if self.iconEntities ~= nil and isvalid(self.iconEntities[i])
+		                and isvalid(self.iconEntities[i].UITransformComponent) then
+		                self.iconEntities[i].UITransformComponent.UIScale = Vector3(1, 1, 1)
+		            end
+		        end
+		        self.fxSlots = {}
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetReelIconRandom(any iconEntity)
+		        -- 릴 아이콘에 무작위 무기 썸네일을 설정한다(연출용 — 결과와 무관).
+		        if not isvalid(iconEntity) then return end
+		        local d = _BlacksmithConfig:GetData()
+		        local order = d.equipmentOrder
+		        local eq = d.equipment[order[_UtilLogic:RandomIntegerRange(1, #order)]]
+		        if eq ~= nil and isvalid(iconEntity.SpriteGUIRendererComponent) then
+		            iconEntity.SpriteGUIRendererComponent.ImageRUID = "thumbnail://" .. eq.icon
+		        end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void TintSlotRandomGrade(integer index)
+		        -- 릴이 한 칸 넘어갈 때 슬롯 배경을 무작위 등급색으로 틴트(정지 시 RenderSlot이 실제 등급색으로 복원).
+		        local d = _BlacksmithConfig:GetData()
+		        local order = d.weaponGradeOrder
+		        local wg = d.weaponGrades[order[_UtilLogic:RandomIntegerRange(1, #order)]]
+		        local slot = self.slotEntities[index]
+		        if wg ~= nil and isvalid(slot) and isvalid(slot.SpriteGUIRendererComponent) then
+		            slot.SpriteGUIRendererComponent.Color = Color(wg.color[1], wg.color[2], wg.color[3], 1.0)
+		        end
+	end
+
+	@ExecSpace("ClientOnly")
 	method void AnimateIcons()
 		        -- 슬롯 아이콘을 사인파로 위아래로 둥둥 띄운다(슬롯별 위상차로 자연스럽게).
 		        -- 슬롯 수는 config(SSOT) 기반 — 위상차도 슬롯 수에 맞춰 균등 분배한다.
+		        -- 릴이 돌고 있는 슬롯은 건너뛴다(아이콘 숨김 중 — 정지한 슬롯부터 개별 재개).
 		        if self.iconEntities == nil then return end
 		        local slotCount = _BlacksmithConfig:GetData().shopSlotCount
 		        for i = 1, slotCount do
-		            local icon = self.iconEntities[i]
-		            if isvalid(icon) and isvalid(icon.UITransformComponent) then
-		                local baseY = self.iconBaseY[i] or 0
-		                local phase = (i - 1) * (2 * math.pi / slotCount)  -- 슬롯마다 균등 위상차
-		                local offset = self.BobAmplitude * math.sin(self.bobTime * self.BobSpeed + phase)
-		                local p = icon.UITransformComponent.anchoredPosition
-		                icon.UITransformComponent.anchoredPosition = Vector2(p.x, baseY + offset)
+		            if not self:IsSlotSpinning(i) then
+		                local icon = self.iconEntities[i]
+		                if isvalid(icon) and isvalid(icon.UITransformComponent) then
+		                    local baseY = self.iconBaseY[i] or 0
+		                    local phase = (i - 1) * (2 * math.pi / slotCount)  -- 슬롯마다 균등 위상차
+		                    local offset = self.BobAmplitude * math.sin(self.bobTime * self.BobSpeed + phase)
+		                    local p = icon.UITransformComponent.anchoredPosition
+		                    icon.UITransformComponent.anchoredPosition = Vector2(p.x, baseY + offset)
+		                end
 		            end
 		        end
 	end
@@ -215,7 +642,7 @@ script WeaponShopManager extends Logic
 		        self:SetSelectionUI(false)
 		        self.slotData = {}
 		        if data == nil or data == "" then return end
-		
+
 		        local i = 0
 		        for token in string.gmatch(data, "([^,]+)") do
 		            i = i + 1
@@ -232,23 +659,23 @@ script WeaponShopManager extends Logic
 		        -- 슬롯 1개 렌더: 아이콘/이름/판매가/구매가/등급 테두리색.
 		        local slot = self.slotEntities[index]
 		        if not isvalid(slot) then return end
-		
+
 		        local eq = _BlacksmithConfig:GetEquipment(equipId)
 		        local wg = _BlacksmithConfig:GetWeaponGrade(grade)
 		        if eq == nil or wg == nil then return end
-		
+
 		        -- 등급 테두리색: 슬롯 버튼 배경 틴트.
 		        local sprite = slot.SpriteGUIRendererComponent
 		        if isvalid(sprite) then
 		            sprite.Color = Color(wg.color[1], wg.color[2], wg.color[3], 1.0)
 		        end
-		
+
 		        -- 아이콘(아바타 무기 아이템 → thumbnail:// 접두사 필요).
 		        local iconEntity = slot:GetChildByName("Icon", false)
 		        if isvalid(iconEntity) and isvalid(iconEntity.SpriteGUIRendererComponent) then
 		            iconEntity.SpriteGUIRendererComponent.ImageRUID = "thumbnail://" .. eq.icon
 		        end
-		
+
 		        self:SetChildText(slot, "Name", wg.label .. " " .. eq.label)
 		        self:SetChildText(slot, "SellValue", "판매가 " .. self:Comma(wg.basePrice))
 		        self:SetChildText(slot, "Price", self:Comma(_GameManager:GetEffectiveBuyCost(wg.buyCost)) .. " 메소")  -- 실효 구매가(가격 협상 증강 할인 반영). 원가 직접표시 금지.
@@ -256,14 +683,15 @@ script WeaponShopManager extends Logic
 
 	@ExecSpace("ClientOnly")
 	method void OnSlotClicked(integer index)
-		        -- 슬롯 클릭 → 선택 표시 + 우측 상세 패널 갱신.
+		        -- 슬롯 클릭 → 선택 표시 + 우측 상세 패널 갱신. 스핀 중에는 무시(결과 확정 연출 대기).
+		        if self.spinning then return end
 		        if self.slotData == nil or self.slotData[index] == nil then return end
 		        self.selectedSlot = index
 		        local s = self.slotData[index]
 		        local eq = _BlacksmithConfig:GetEquipment(s.equipId)
 		        local wg = _BlacksmithConfig:GetWeaponGrade(s.grade)
 		        if eq == nil or wg == nil then return end
-		
+
 		        if isvalid(self.detailIcon) then
 		            self.detailIcon.ImageRUID = "thumbnail://" .. eq.icon
 		        end
@@ -277,6 +705,7 @@ script WeaponShopManager extends Logic
 	@ExecSpace("ClientOnly")
 	method void OnBuyClicked()
 		        -- 구입: 선택된 슬롯 인덱스를 서버로 보낸다(서버가 등급/가격 검증·차감·재추첨).
+		        if self.spinning then return end  -- 스핀 중 구매 차단(선택도 불가하지만 이중 가드)
 		        if self.selectedSlot < 1 then
 		            log("[WeaponShopManager] buy ignored: no slot selected")
 		            return
@@ -290,7 +719,7 @@ script WeaponShopManager extends Logic
 
 	@ExecSpace("ClientOnly")
 	method void OnRefreshClicked()
-		        -- 새로고침: 서버에 상점 재추첨 요청(메소 차감 없음).
+		        -- 새로고침: 서버에 상점 재추첨 요청(메소 차감 없음). 새 데이터 도착 시 스핀이 다시 돈다.
 		        log("[WeaponShopManager] request refresh shop")
 		        _GameManager:RequestRefreshShop()
 	end
