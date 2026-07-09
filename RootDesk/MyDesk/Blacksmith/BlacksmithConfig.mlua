@@ -1,353 +1,353 @@
 @Logic
 script BlacksmithConfig extends Logic
-    -- 커닝시티 뒷골목 대장장이 — 전 밸런스 상수의 단일 진실 공급원(SSOT).
-    -- 여기 있는 모든 수치는 조정 가능한 기본값이다. 기획 확정 시 이 파일만 수정한다.
-    property any Data = nil
 
-    method void OnInitialize()
-        -- 서버/클라이언트 양쪽에서 동일한 설정 사본을 미리 구축한다.
-        self:BuildData()
-    end
+	property any Data = nil
 
-    method void OnBeginPlay()
-        -- 검증용: 설정이 정상 구축되었는지 로그로 증거를 남긴다.
-        local d = self:GetData()
-        log("[BlacksmithConfig] ready. startMeso=" .. tostring(d.startMeso)
-            .. ", cubeCost=" .. tostring(d.cubeCost)
-            .. ", equipments=" .. tostring(#d.equipmentOrder))
-    end
+	method void OnInitialize()
+		        -- 서버/클라이언트 양쪽에서 동일한 설정 사본을 미리 구축한다.
+		        self:BuildData()
+	end
 
-    method void BuildData()
-        -- 모든 밸런스 상수를 조립한다(지연 1회).
-        if self.Data ~= nil then return end
-        local d = {}
+	method void OnBeginPlay()
+		        -- 검증용: 설정이 정상 구축되었는지 로그로 증거를 남긴다.
+		        local d = self:GetData()
+		        log("[BlacksmithConfig] ready. startMeso=" .. tostring(d.startMeso)
+		            .. ", cubeCost=" .. tostring(d.cubeCost)
+		            .. ", equipments=" .. tostring(#d.equipmentOrder))
+	end
 
-        -- 시작/재화 기본값 (flow §5, concept §6-2)
-        d.startMeso = 40000
-        d.cubeCost = 5000              -- 이상한 큐브 사용 비용(폴백 — d.cubes.weird.cost가 SSOT)
-        d.bonusChance = 15             -- 이탈 확률(%) — 주요 옵션 1줄당 (potential §8)
+	method void BuildData()
+		        -- 모든 밸런스 상수를 조립한다(지연 1회).
+		        if self.Data ~= nil then return end
+		        local d = {}
+		
+		        -- 시작/재화 기본값 (flow §5, concept §6-2)
+		        d.startMeso = 70000
+		        d.cubeCost = 8000              -- 이상한 큐브 사용 비용(폴백 — d.cubes.weird.cost가 SSOT)
+		        d.bonusChance = 15             -- 이탈 확률(%) — 주요 옵션 1줄당 (potential §8)
+		
+		        -- 큐브 종류 (concept §6-2, potential §12). 메커톤: 이상한 큐브 + 장인의 큐브 2종.
+		        --   cost: 1회 사용 비용. allowDestroy: 파괴 항목 등장 가능 여부(장인의 큐브는 false → 파괴 없음).
+		        --   icon: 큐브 아이콘 스프라이트 RUID(좌하단 큐브 선택 UI / 중앙 큐브 아이콘). 빈 값 금지.
+		        d.cubeOrder = {"weird", "master"}
+		        --   ⚠ icon은 plain 스프라이트 RUID(thumbnail:// 접두사 없이 ImageRUID에 직접 설정). 메이플 공식 큐브 아이콘.
+		        --   이상한 큐브=수상한 큐브, 장인의 큐브=블랙 큐브 (msw-search 리소스 검색).
+		        d.cubes = {
+		            weird  = { key = "weird",  label = "이상한 큐브", cost = 8000,  allowDestroy = true,  icon = "31e4268ff65b4281abd509162ca199e3" },
+		            master = { key = "master", label = "장인의 큐브", cost = 45000, allowDestroy = false, icon = "1edec01f822c422293f62729e7462a22" },
+		        }
+		
+		        -- 등급 (potential §4)
+		        d.gradeOrder = {"Rare", "Epic", "Unique", "Legendary"}
+		        d.gradeProb = { Rare = 60, Epic = 28, Unique = 10, Legendary = 2 }       -- 합 100
+		        d.gradeMult = { Rare = 1.0, Epic = 1.7, Unique = 2.8, Legendary = 4.2 }  -- 등급 배수
+		
+		        -- 옵션 타입 확률 — 각 줄 개별 판정 (potential §5). 합 100.
+		        d.optionTypeProb = { Main = 62, Junk = 34, Destroy = 4 }
+		
+		        -- 주요 옵션 풀: 주스탯4 + 공격계열3 = 7종 균등 추첨 (potential §6)
+		        d.mainPool = {"STR", "DEX", "INT", "LUK", "ATK", "MATK", "BATK"}
+		        d.mainOptions = {
+		            STR  = { group = "MainStat", normal = 9,  bonus = 12, label = "STR",        unit = "%" },
+		            DEX  = { group = "MainStat", normal = 9,  bonus = 12, label = "DEX",        unit = "%" },
+		            INT  = { group = "MainStat", normal = 9,  bonus = 12, label = "INT",        unit = "%" },
+		            LUK  = { group = "MainStat", normal = 9,  bonus = 12, label = "LUK",        unit = "%" },
+		            ATK  = { group = "Attack",   normal = 6,  bonus = 9,  label = "공격력",      unit = "%" },
+		            MATK = { group = "Attack",   normal = 6,  bonus = 9,  label = "마력",        unit = "%" },
+		            BATK = { group = "Attack",   normal = 20, bonus = 30, label = "보스공격력",  unit = "%" },
+		        }
+		
+		        -- 잡옵 (potential §7) — value/보너스 (pricing §9)
+		        d.junkPool = {"Sleep", "Speed", "Jump", "Language", "Charm"}
+		        d.junkOptions = {
+		            Sleep    = { value = 30, unit = "%", bonus = 100, label = "수면 효율" },
+		            Speed    = { value = 10, unit = "",  bonus = 200, label = "이동속도" },
+		            Jump     = { value = 10, unit = "",  bonus = 300, label = "점프력" },
+		            Language = { value = 30, unit = "%", bonus = 400, label = "언어 능력" },
+		            Charm    = { value = 30, unit = "%", bonus = 500, label = "친화력" },
+		        }
+		
+		        -- 옵션 보너스 — 유효 기준 (pricing §9)
+		        d.optionBonus = {
+		            validStat   = 15000,   -- 유효 주스탯 (STR/DEX/INT/LUK)
+		            validAtk    = 20000,   -- 유효 공격력 / 마력
+		            validBatk   = 25000,   -- 유효 보스공격력
+		            invalidMain = 5000,    -- 비유효 주요 옵션 (장비와 안 맞는 주스탯/공격계열)
+		        }
+		
+		        -- 이탈 배수 — 유효 이탈 개수 기준 (pricing §12). 키 = 개수(0~3)
+		        d.bonusMult = { [0] = 1.0, [1] = 1.3, [2] = 1.8, [3] = 2.5 }
+		
+		        -- 조합 보너스 — 우선순위 높은 순서대로. 적용은 PricingCalculator에서 최고 1개만. (pricing §10)
+		        d.comboBonus = {
+		            { key = "godAttack",  bonus = 220000 },  -- 유효 공격계열 3줄 + 유효 이탈 3개 (신급 대박)
+		            { key = "legendStat", bonus = 220000 },  -- 유효 동일 주스탯 3줄 + 유효 이탈 3개 (전설급 대박)
+		            { key = "attack3",    bonus = 140000 },  -- 유효 공격계열 3줄
+		            { key = "sameStat3",  bonus = 120000 },  -- 유효 동일 주스탯 3줄
+		            { key = "main3",      bonus = 80000  },  -- 유효 주요 옵션 3줄
+		            { key = "main2bonus", bonus = 45000  },  -- 유효 주요 옵션 2줄 + 이탈 포함
+		        }
+		
+		        -- 장비 5종 (flow §6, pricing §7·§8). 무기 *종류*는 유효 옵션(stat/atk)·아이콘만 결정한다.
+		        -- 보스공격력(BATK)은 모든 장비에서 유효이므로 atk 목록에 포함한다.
+		        -- ⚠ basePrice/buyCost는 무기 등급(d.weaponGrades, 아래)이 대체한다 — 상점 구매 시 GameManager가
+		        --   구매한 등급의 basePrice/buyCost를 사용한다. 여기 값은 등급 정보가 없을 때의 폴백으로만 남겨둔다.
+		        -- icon: 아바타 무기 아이템 RUID(상점 아이콘). 렌더 시 "thumbnail://" 접두사를 붙인다(avataritem 규칙).
+		        d.equipment = {
+		            sword  = { id = "sword",  label = "검",     stat = "STR", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000, icon = "2f92c17d771e4b1d887b3e58ecfab6bf" },
+		            bow    = { id = "bow",    label = "활",     stat = "DEX", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000, icon = "0b85f005a25241189d274e61c5df0cdd" },
+		            staff  = { id = "staff",  label = "스태프", stat = "INT", atk = {"MATK", "BATK"}, basePrice = 100000, buyCost = 40000, icon = "989be911209545fdacf84f92874cb338" },
+		            wand   = { id = "wand",   label = "완드",   stat = "INT", atk = {"MATK", "BATK"}, basePrice = 50000,  buyCost = 18000, icon = "133e697ac731441a912f1e58ec2a9182" },
+		            dagger = { id = "dagger", label = "단도",   stat = "LUK", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000, icon = "11ccce1ca9224050897b2d59fe14a3bf" },
+		        }
+		        d.equipmentOrder = {"bow", "wand", "sword", "dagger", "staff"}
+		
+		        -- 무기 등급(상점) = "아이템 기본 판매가" 티어. 잠재능력 등급(gradeMult)과는 별개 차원이다.
+		        --   같은 등급이면 무기 종류가 달라도 basePrice·buyCost가 동일하다(커먼 활 == 커먼 검 가격).
+		        --   ⚠ key 이름(Rare/Epic/Unique/Legendary)이 잠재능력 등급(d.gradeProb/d.gradeMult)과 겹치나,
+		        --     별개 테이블(weaponGrades vs gradeProb)이라 기능 충돌은 없다. 혼동 주의.
+		        --   구매가(buyCost) = 기본판매가(basePrice) × 1.2 → 구매가 > 판매가. 큐브로 잠재를 안 올리면 손해
+		        --     (도박 강제 경제, weapon_shop.md §7 / 초안 §7 비율 1.2). 시작메소 40000이면 초반엔 커먼만 구매 가능.
+		        --   color = 슬롯 테두리 색(등급 시각화), prob = 상점 슬롯 추첨 확률(%). prob 합 100.
+		        --   수치는 초기 기준안(weapon_shop.md §7·§9 참조) — 플레이테스트로 조정.
+		        d.shopSlotCount = 3  -- 상점에 동시에 노출되는 무기 슬롯 수 (weapon_shop.md §4 기준: 3슬롯)
+		        d.weaponGradeOrder = {"Common", "Rare", "Epic", "Unique", "Legendary"}
+		        -- prob = 0단계(더좋은물품 미보유) 기본 등장 확률(%) — 무기 상점 기획서 §9 기준안(60/30/9/1/0, 합 100).
+		        --   0단계에서는 레전더리 0%·유니크 1% — 상위 등급은 증강 '더 좋은 물품'(betterGoodsGradeProb)으로만 열린다.
+		        d.weaponGrades = {
+		            Common    = { key = "Common",    label = "커먼",     basePrice = 25000,  buyCost = 30000,  prob = 60, color = {0.62, 0.64, 0.68} },
+		            Rare      = { key = "Rare",      label = "레어",     basePrice = 50000,  buyCost = 60000,  prob = 30, color = {0.30, 0.58, 0.92} },
+		            Epic      = { key = "Epic",      label = "에픽",     basePrice = 100000, buyCost = 120000, prob = 9,  color = {0.70, 0.40, 0.92} },
+		            Unique    = { key = "Unique",    label = "유니크",   basePrice = 200000, buyCost = 240000, prob = 1,  color = {0.96, 0.80, 0.22} },
+		            Legendary = { key = "Legendary", label = "레전더리", basePrice = 400000, buyCost = 480000, prob = 0,  color = {0.40, 0.85, 0.45} },
+		        }
+		
+		        -- 증강 '더 좋은 물품 들여오기' 단계별 상점 등급 절대 확률표 (blacksmith_upgrade.md §6).
+		        --   0단계(미보유) = 위 weaponGrades.prob(30/30/28/10/2). 각 표의 합은 100.
+		        --   1단계는 레전더리 0% — RollWeaponGrade가 0 가중치를 허용하므로 그대로 동작한다.
+		        d.betterGoodsGradeProb = {
+		            [1] = { Common = 45, Rare = 40, Epic = 12, Unique = 3,  Legendary = 0 },
+		            [2] = { Common = 30, Rare = 42, Epic = 20, Unique = 7,  Legendary = 1 },
+		            [3] = { Common = 18, Rare = 38, Epic = 27, Unique = 13, Legendary = 4 },
+		        }
+		
+		        -- 빚 상환 (concept §6-3, flow §15, finance_management.md 상환액 스케줄)
+		        d.debtCycle = 5                                -- N회 큐브 사용마다 상환
+		        d.debtTable = {45000, 75000, 110000, 150000}   -- 1~4주 금액
+		        d.debtGrowth = 1.1                             -- 테이블 범위 밖(5주~)은 매주 ×1.1
+		        d.winStage = 5                                 -- 상환 N회 성공 시 승리
+		
+		        -- ── 대장 기술(증강) (blacksmith_upgrade.md §5·§6) ──────────────────────────
+		        --   증강은 상환 단계 도달 시 3택 1로 획득(MVP 트리거). 같은 증강 중복 시 단계 상승(최대 3).
+		        --   3단계 소진 증강은 이후 선택지에 등장하지 않는다(§5).
+		        --   stages[stage] = 해당 단계의 효과 수치. type/applyTarget은 효과 배선 위치를 가리킨다.
+		        --   ⚠ 기획서는 단계별 수치를 "소폭/증가/크게"로만 명시 → 아래는 코드 측 기준안(플레이테스트로 조정).
+		        d.augmentMaxStage = 3      -- 한 증강당 최대 단계 (§5: 3단계까지만 등장)
+		        d.augmentChoiceCount = 3   -- 획득 시 제시하는 무작위 선택지 수 (§4-4: 3개)
+		        d.augmentOrder = {"betterGoods", "smithEye", "priceNego", "riskyDeal"}
+		        -- 증강 구매 비용 = 증강이 '도달할 단계' 기준(단계 높을수록 비쌈). (blacksmith_upgrade.md §3)
+		        --   구매 방식(유저 확정): 로비 '대장 기술' → 3택 창 → 각 증강 하단의 구매 골드로 즉시 지불.
+		        --   1단계 7,500 / 2단계 12,500 / 3단계 20,000. 범위 밖은 마지막 값으로 클램프.
+		        d.augmentCosts = {7500, 12500, 20000}
+		        -- icon: 증강 아이콘 스프라이트 RUID(증강 UI 슬롯/보유 목록). plain 스프라이트라 thumbnail:// 접두사 없이
+		        --   ImageRUID에 직접 설정한다(cubes.icon 패턴). msw-search로 확보한 메이플 공식 아이템 아이콘.
+		        d.augments = {
+		            -- 더 좋은 물품 들여오기: 상점에 높은 등급 무기가 등장할 확률 증가 (§6, 적용=RollShop)
+		            --   ⚠ 효과는 배수가 아니라 단계별 절대 확률표(d.betterGoodsGradeProb)로 적용된다.
+		            --     stages는 단계 표기용(1/2/3)일 뿐 수치 의미 없음 — RollShop이 보유 단계를 직접 넘긴다.
+		            betterGoods = { key = "betterGoods", name = "더 좋은 물품 들여오기", type = "shopGrade",
+		                applyTarget = "RollShop", desc = "무기 상점에 높은 등급 무기가 등장할 확률 증가",
+		                stages = {1, 2, 3}, icon = "c3c4aca456474afe9602518db5c21abe" },  -- 금은보화(보물상자)
+		            -- 대장장이의 눈: 현재 무기와 맞는 유효 옵션 등장 확률 증가 (§6, 적용=RollLine)
+		            --   stages = 주요 옵션 1줄이 '유효 옵션'으로 강제될 확률(%). 10/20/45 (blacksmith_upgrade.md §6).
+		            smithEye = { key = "smithEye", name = "대장장이의 눈", type = "validOption",
+		                applyTarget = "RollLine", desc = "현재 무기의 유효 옵션 등장 확률 증가",
+		                stages = {10, 20, 45}, icon = "2c87d6385a60420ab55fa8d36ff3d6dc" },  -- 감정 돋보기
+		            -- 가격 협상: 무기 구매가 감소, 게임 끝까지 유지 (§6, 적용=RequestBuyItem)
+		            --   stages = 구매가 감소율(%). 10/18/40 (blacksmith_upgrade.md §6).
+		            priceNego = { key = "priceNego", name = "가격 협상", type = "buyCost",
+		                applyTarget = "RequestBuyItem", desc = "무기 구매가 감소",
+		                stages = {10, 18, 40}, icon = "0bc56bdb2ba54b3dbdf43ff07cddb57f" },  -- 돈 주머니
+		            -- 위험 거래: 상환 이자 증가 + 판매가 증가(고위험 고수익) (§6, 적용=Pricing+Debt)
+		            --   stages = 판매가/상환이자 동시 증가율(%). 10/20/30.
+		            riskyDeal = { key = "riskyDeal", name = "위험 거래", type = "riskReward",
+		                applyTarget = "Pricing+Debt", desc = "상환 이자 증가, 대신 판매가 증가",
+		                stages = {10, 20, 30}, icon = "8114bc5eeba544989e14a8e46a1ea0f2" },  -- 시한폭탄
+		        }
+		
+		        -- ── 재정 관리 (finance_management.md) ─────────────────────────────────────
+		        -- 메소 대출 서비스 (§2·§3, 필수 구현). 사용 횟수는 확정값 1회.
+		        --   대출 금액은 고정값이 아니라 '현재 상환 필요 메소'에 동적 연동한다(유저 확정):
+		        --   지급 메소 = 현재 상환 필요 메소, 빚도 그만큼 증가 → 상환 시 '상환금 + 빚'을 한 번에 청구.
+		        --   (금액 계산은 GameManager:GetCurrentRepayment(). 여기선 사용 횟수 제한만 상수로 둔다.)
+		        d.loan = {
+		            maxUses = 1,          -- 한 게임당 대출 가능 횟수 (확정: 1회)
+		        }
+		        -- 골드리치 은행 저축 (§6~§8, 후순위 — 데이터만 준비, 로직은 미구현).
+		        --   '하루' = 상환 주기 1회(= DebtStage 증가) 기준(A안: 일차 = DebtStage+1).
+		        d.savings = {
+		            minDeposit = 10000,   -- 최소 저축 금액 (§8)
+		            dailyRate = 5,        -- 상환 1회(하루)당 이자율(%) (§8)
+		        }
+		
+		        self.Data = d
+	end
 
-        -- 큐브 종류 (concept §6-2, potential §12). 메커톤: 이상한 큐브 + 장인의 큐브 2종.
-        --   cost: 1회 사용 비용. allowDestroy: 파괴 항목 등장 가능 여부(장인의 큐브는 false → 파괴 없음).
-        --   icon: 큐브 아이콘 스프라이트 RUID(좌하단 큐브 선택 UI / 중앙 큐브 아이콘). 빈 값 금지.
-        d.cubeOrder = {"weird", "master"}
-        --   ⚠ icon은 plain 스프라이트 RUID(thumbnail:// 접두사 없이 ImageRUID에 직접 설정). 메이플 공식 큐브 아이콘.
-        --   이상한 큐브=수상한 큐브, 장인의 큐브=블랙 큐브 (msw-search 리소스 검색).
-        d.cubes = {
-            weird  = { key = "weird",  label = "이상한 큐브", cost = 5000,  allowDestroy = true,  icon = "31e4268ff65b4281abd509162ca199e3" },
-            master = { key = "master", label = "장인의 큐브", cost = 15000, allowDestroy = false, icon = "1edec01f822c422293f62729e7462a22" },
-        }
+	method any GetData()
+		        -- 전체 설정 테이블 반환(지연 구축).
+		        if self.Data == nil then self:BuildData() end
+		        return self.Data
+	end
 
-        -- 등급 (potential §4)
-        d.gradeOrder = {"Rare", "Epic", "Unique", "Legendary"}
-        d.gradeProb = { Rare = 60, Epic = 28, Unique = 10, Legendary = 2 }       -- 합 100
-        d.gradeMult = { Rare = 1.0, Epic = 2.0, Unique = 3.5, Legendary = 5.0 }  -- 등급 배수
+	method any GetEquipment(string id)
+		        -- 장비 1종 정의 반환. 알 수 없는 id면 nil.
+		        return self:GetData().equipment[id]
+	end
 
-        -- 옵션 타입 확률 — 각 줄 개별 판정 (potential §5). 합 100.
-        d.optionTypeProb = { Main = 45, Junk = 45, Destroy = 10 }
+	method any GetEquipmentOrder()
+		        -- 구매/표시 순서의 장비 id 배열.
+		        return self:GetData().equipmentOrder
+	end
 
-        -- 주요 옵션 풀: 주스탯4 + 공격계열3 = 7종 균등 추첨 (potential §6)
-        d.mainPool = {"STR", "DEX", "INT", "LUK", "ATK", "MATK", "BATK"}
-        d.mainOptions = {
-            STR  = { group = "MainStat", normal = 9,  bonus = 12, label = "STR",        unit = "%" },
-            DEX  = { group = "MainStat", normal = 9,  bonus = 12, label = "DEX",        unit = "%" },
-            INT  = { group = "MainStat", normal = 9,  bonus = 12, label = "INT",        unit = "%" },
-            LUK  = { group = "MainStat", normal = 9,  bonus = 12, label = "LUK",        unit = "%" },
-            ATK  = { group = "Attack",   normal = 6,  bonus = 9,  label = "공격력",      unit = "%" },
-            MATK = { group = "Attack",   normal = 6,  bonus = 9,  label = "마력",        unit = "%" },
-            BATK = { group = "Attack",   normal = 20, bonus = 30, label = "보스공격력",  unit = "%" },
-        }
+	method any GetWeaponGrade(string key)
+		        -- 무기 등급 1종 정의 반환(basePrice/buyCost/color/label). 알 수 없는 key면 nil.
+		        return self:GetData().weaponGrades[key]
+	end
 
-        -- 잡옵 (potential §7) — value/보너스 (pricing §9)
-        d.junkPool = {"Sleep", "Speed", "Jump", "Language", "Charm"}
-        d.junkOptions = {
-            Sleep    = { value = 30, unit = "%", bonus = 100, label = "수면 효율" },
-            Speed    = { value = 10, unit = "",  bonus = 200, label = "이동속도" },
-            Jump     = { value = 10, unit = "",  bonus = 300, label = "점프력" },
-            Language = { value = 30, unit = "%", bonus = 400, label = "언어 능력" },
-            Charm    = { value = 30, unit = "%", bonus = 500, label = "친화력" },
-        }
+	method any GetCube(string key)
+		        -- 큐브 1종 정의 반환(cost/allowDestroy/icon/label). 알 수 없는 key면 nil.
+		        return self:GetData().cubes[key]
+	end
 
-        -- 옵션 보너스 — 유효 기준 (pricing §9)
-        d.optionBonus = {
-            validStat   = 15000,   -- 유효 주스탯 (STR/DEX/INT/LUK)
-            validAtk    = 20000,   -- 유효 공격력 / 마력
-            validBatk   = 25000,   -- 유효 보스공격력
-            invalidMain = 5000,    -- 비유효 주요 옵션 (장비와 안 맞는 주스탯/공격계열)
-        }
+	method any GetWeaponGradeOrder()
+		        -- 무기 등급 표시/추첨 순서 배열(낮은 등급 → 높은 등급).
+		        return self:GetData().weaponGradeOrder
+	end
 
-        -- 이탈 배수 — 유효 이탈 개수 기준 (pricing §12). 키 = 개수(0~3)
-        d.bonusMult = { [0] = 1.0, [1] = 1.3, [2] = 1.8, [3] = 2.5 }
+	method any GetShopGradeProbTable(integer betterGoodsStage)
+		        -- 상점 등급 확률표 반환 {gradeKey=확률(%)}. (blacksmith_upgrade.md §6)
+		        --   0단계(미보유) = weaponGrades.prob 기본표, 1~3단계 = betterGoodsGradeProb 절대 확률표.
+		        --   범위 초과 단계는 최대 단계 표로 클램프. 각 표의 합은 100이라 값이 곧 %다.
+		        local d = self:GetData()
+		        if betterGoodsStage >= 1 then
+		            local n = #d.betterGoodsGradeProb
+		            local stage = betterGoodsStage
+		            if stage > n then stage = n end
+		            return d.betterGoodsGradeProb[stage]
+		        end
+		        local base = {}
+		        for _, key in ipairs(d.weaponGradeOrder) do
+		            base[key] = d.weaponGrades[key].prob
+		        end
+		        return base
+	end
 
-        -- 조합 보너스 — 우선순위 높은 순서대로. 적용은 PricingCalculator에서 최고 1개만. (pricing §10)
-        d.comboBonus = {
-            { key = "godAttack",  bonus = 150000 },  -- 유효 공격계열 3줄 + 유효 이탈 3개 (신급 대박)
-            { key = "legendStat", bonus = 150000 },  -- 유효 동일 주스탯 3줄 + 유효 이탈 3개 (전설급 대박)
-            { key = "attack3",    bonus = 90000  },  -- 유효 공격계열 3줄
-            { key = "sameStat3",  bonus = 75000  },  -- 유효 동일 주스탯 3줄
-            { key = "main3",      bonus = 50000  },  -- 유효 주요 옵션 3줄
-            { key = "main2bonus", bonus = 35000  },  -- 유효 주요 옵션 2줄 + 이탈 포함
-        }
+	method any RollWeaponGradeDetail(integer betterGoodsStage)
+		        -- 등급 확률표로 무기 등급 1개를 추첨하고 추첨 상세를 반환한다(서버 권위 추첨에서 호출).
+		        -- betterGoodsStage: 증강 '더 좋은 물품' 보유 단계(0=미보유). 단계별 절대 확률표를 사용한다.
+		        --   가중치를 재정규화해 확률로 환산하므로 표의 합이 100이 아니어도 동작한다(0 가중치 허용).
+		        -- 반환: { grade = 등급 key, roll = 실제 뽑힌 랜덤 값(0~total), total = 가중치 총합(보통 100) }
+		        --   roll은 등급 누적 구간과 비교해 "몇이 떠서 이 등급이 나왔는지" 로그 표기에 쓰인다.
+		        local d = self:GetData()
+		        local weights = self:GetShopGradeProbTable(betterGoodsStage)
+		        local total = 0
+		        for _, key in ipairs(d.weaponGradeOrder) do
+		            total = total + weights[key]
+		        end
+		        if total <= 0 then
+		            return { grade = d.weaponGradeOrder[1], roll = 0, total = 0 }
+		        end
+		        local roll = _UtilLogic:RandomDouble() * total
+		        local acc = 0
+		        for _, key in ipairs(d.weaponGradeOrder) do
+		            acc = acc + weights[key]
+		            if roll <= acc then
+		                return { grade = key, roll = roll, total = total }
+		            end
+		        end
+		        return { grade = d.weaponGradeOrder[#d.weaponGradeOrder], roll = roll, total = total }  -- 폴백(부동소수 오차 대비)
+	end
 
-        -- 장비 5종 (flow §6, pricing §7·§8). 무기 *종류*는 유효 옵션(stat/atk)·아이콘만 결정한다.
-        -- 보스공격력(BATK)은 모든 장비에서 유효이므로 atk 목록에 포함한다.
-        -- ⚠ basePrice/buyCost는 무기 등급(d.weaponGrades, 아래)이 대체한다 — 상점 구매 시 GameManager가
-        --   구매한 등급의 basePrice/buyCost를 사용한다. 여기 값은 등급 정보가 없을 때의 폴백으로만 남겨둔다.
-        -- icon: 아바타 무기 아이템 RUID(상점 아이콘). 렌더 시 "thumbnail://" 접두사를 붙인다(avataritem 규칙).
-        d.equipment = {
-            sword  = { id = "sword",  label = "검",     stat = "STR", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000, icon = "2f92c17d771e4b1d887b3e58ecfab6bf" },
-            bow    = { id = "bow",    label = "활",     stat = "DEX", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000, icon = "0b85f005a25241189d274e61c5df0cdd" },
-            staff  = { id = "staff",  label = "스태프", stat = "INT", atk = {"MATK", "BATK"}, basePrice = 100000, buyCost = 40000, icon = "989be911209545fdacf84f92874cb338" },
-            wand   = { id = "wand",   label = "완드",   stat = "INT", atk = {"MATK", "BATK"}, basePrice = 50000,  buyCost = 18000, icon = "133e697ac731441a912f1e58ec2a9182" },
-            dagger = { id = "dagger", label = "단도",   stat = "LUK", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000, icon = "11ccce1ca9224050897b2d59fe14a3bf" },
-        }
-        d.equipmentOrder = {"bow", "wand", "sword", "dagger", "staff"}
+	method string RollWeaponGrade(integer betterGoodsStage)
+		        -- 등급 key만 필요한 호출부용 래퍼(분포 테스트 등). 상세는 RollWeaponGradeDetail 참조.
+		        local r = self:RollWeaponGradeDetail(betterGoodsStage)
+		        return r.grade
+	end
 
-        -- 무기 등급(상점) = "아이템 기본 판매가" 티어. 잠재능력 등급(gradeMult)과는 별개 차원이다.
-        --   같은 등급이면 무기 종류가 달라도 basePrice·buyCost가 동일하다(커먼 활 == 커먼 검 가격).
-        --   ⚠ key 이름(Rare/Epic/Unique/Legendary)이 잠재능력 등급(d.gradeProb/d.gradeMult)과 겹치나,
-        --     별개 테이블(weaponGrades vs gradeProb)이라 기능 충돌은 없다. 혼동 주의.
-        --   구매가(buyCost) = 기본판매가(basePrice) × 1.2 → 구매가 > 판매가. 큐브로 잠재를 안 올리면 손해
-        --     (도박 강제 경제, weapon_shop.md §7 / 초안 §7 비율 1.2). 시작메소 40000이면 초반엔 커먼만 구매 가능.
-        --   color = 슬롯 테두리 색(등급 시각화), prob = 상점 슬롯 추첨 확률(%). prob 합 100.
-        --   수치는 초기 기준안(weapon_shop.md §7·§9 참조) — 플레이테스트로 조정.
-        d.shopSlotCount = 3  -- 상점에 동시에 노출되는 무기 슬롯 수 (weapon_shop.md §4 기준: 3슬롯)
-        d.weaponGradeOrder = {"Common", "Rare", "Epic", "Unique", "Legendary"}
-        -- prob = 0단계(더좋은물품 미보유) 기본 등장 확률(%) — 무기 상점 기획서 §9 기준안(60/30/9/1/0, 합 100).
-        --   0단계에서는 레전더리 0%·유니크 1% — 상위 등급은 증강 '더 좋은 물품'(betterGoodsGradeProb)으로만 열린다.
-        d.weaponGrades = {
-            Common    = { key = "Common",    label = "커먼",     basePrice = 25000,  buyCost = 30000,  prob = 60, color = {0.62, 0.64, 0.68} },
-            Rare      = { key = "Rare",      label = "레어",     basePrice = 50000,  buyCost = 60000,  prob = 30, color = {0.30, 0.58, 0.92} },
-            Epic      = { key = "Epic",      label = "에픽",     basePrice = 100000, buyCost = 120000, prob = 9,  color = {0.70, 0.40, 0.92} },
-            Unique    = { key = "Unique",    label = "유니크",   basePrice = 200000, buyCost = 240000, prob = 1,  color = {0.96, 0.80, 0.22} },
-            Legendary = { key = "Legendary", label = "레전더리", basePrice = 400000, buyCost = 480000, prob = 0,  color = {0.40, 0.85, 0.45} },
-        }
+	method number GetGradeMultiplier(string grade)
+		        -- 등급 판매가 배수.
+		        return self:GetData().gradeMult[grade]
+	end
 
-        -- 증강 '더 좋은 물품 들여오기' 단계별 상점 등급 절대 확률표 (blacksmith_upgrade.md §6).
-        --   0단계(미보유) = 위 weaponGrades.prob(30/30/28/10/2). 각 표의 합은 100.
-        --   1단계는 레전더리 0% — RollWeaponGrade가 0 가중치를 허용하므로 그대로 동작한다.
-        d.betterGoodsGradeProb = {
-            [1] = { Common = 35, Rare = 45, Epic = 14, Unique = 6,  Legendary = 0  },
-            [2] = { Common = 20, Rare = 50, Epic = 19, Unique = 9,  Legendary = 2  },
-            [3] = { Common = 12, Rare = 35, Epic = 26, Unique = 17, Legendary = 10 },
-        }
+	method number GetBonusMultiplier(integer count)
+		        -- 유효 이탈 개수별 배수 (0~3 범위로 클램프).
+		        local t = self:GetData().bonusMult
+		        if count > 3 then count = 3 end
+		        if count < 0 then count = 0 end
+		        return t[count]
+	end
 
-        -- 빚 상환 (concept §6-3, flow §15, finance_management.md 상환액 스케줄)
-        d.debtCycle = 5                              -- N회 큐브 사용마다 상환 (5/5 = 한 주 경과)
-        d.debtTable = {45000, 70000, 100000, 140000} -- 1~4주 금액 (stage1 45000 > 시작메소 40000 → 초기부터 압박)
-        d.debtGrowth = 1.1                           -- 테이블 범위 밖(5주~)은 매주 ×1.1 (10% 증가, 1000단위 반올림)
-        d.winStage = 5                               -- 상환 N회 성공 시 승리 (finance_management.md 승리 조건)
+	method boolean IsValidMain(string equipId, string optionName)
+		        -- 주요 옵션이 해당 장비에 유효한지 판정. 보스공격력(BATK)은 항상 유효. (pricing §8)
+		        local eq = self:GetEquipment(equipId)
+		        if eq == nil then return false end
+		        local opt = self:GetData().mainOptions[optionName]
+		        if opt == nil then return false end
+		        if opt.group == "MainStat" then
+		            return optionName == eq.stat
+		        elseif opt.group == "Attack" then
+		            for _, a in ipairs(eq.atk) do
+		                if a == optionName then return true end
+		            end
+		            return false
+		        end
+		        return false
+	end
 
-        -- ── 대장 기술(증강) (blacksmith_upgrade.md §5·§6) ──────────────────────────
-        --   증강은 상환 단계 도달 시 3택 1로 획득(MVP 트리거). 같은 증강 중복 시 단계 상승(최대 3).
-        --   3단계 소진 증강은 이후 선택지에 등장하지 않는다(§5).
-        --   stages[stage] = 해당 단계의 효과 수치. type/applyTarget은 효과 배선 위치를 가리킨다.
-        --   ⚠ 기획서는 단계별 수치를 "소폭/증가/크게"로만 명시 → 아래는 코드 측 기준안(플레이테스트로 조정).
-        d.augmentMaxStage = 3      -- 한 증강당 최대 단계 (§5: 3단계까지만 등장)
-        d.augmentChoiceCount = 3   -- 획득 시 제시하는 무작위 선택지 수 (§4-4: 3개)
-        d.augmentOrder = {"betterGoods", "smithEye", "priceNego", "riskyDeal"}
-        -- 증강 구매 비용 = 증강이 '도달할 단계' 기준(단계 높을수록 비쌈). (blacksmith_upgrade.md §3)
-        --   구매 방식(유저 확정): 로비 '대장 기술' → 3택 창 → 각 증강 하단의 구매 골드로 즉시 지불.
-        --   1단계 7,500 / 2단계 12,500 / 3단계 20,000. 범위 밖은 마지막 값으로 클램프.
-        d.augmentCosts = {7500, 12500, 20000}
-        -- icon: 증강 아이콘 스프라이트 RUID(증강 UI 슬롯/보유 목록). plain 스프라이트라 thumbnail:// 접두사 없이
-        --   ImageRUID에 직접 설정한다(cubes.icon 패턴). msw-search로 확보한 메이플 공식 아이템 아이콘.
-        d.augments = {
-            -- 더 좋은 물품 들여오기: 상점에 높은 등급 무기가 등장할 확률 증가 (§6, 적용=RollShop)
-            --   ⚠ 효과는 배수가 아니라 단계별 절대 확률표(d.betterGoodsGradeProb)로 적용된다.
-            --     stages는 단계 표기용(1/2/3)일 뿐 수치 의미 없음 — RollShop이 보유 단계를 직접 넘긴다.
-            betterGoods = { key = "betterGoods", name = "더 좋은 물품 들여오기", type = "shopGrade",
-                applyTarget = "RollShop", desc = "무기 상점에 높은 등급 무기가 등장할 확률 증가",
-                stages = {1, 2, 3}, icon = "c3c4aca456474afe9602518db5c21abe" },  -- 금은보화(보물상자)
-            -- 대장장이의 눈: 현재 무기와 맞는 유효 옵션 등장 확률 증가 (§6, 적용=RollLine)
-            --   stages = 주요 옵션 1줄이 '유효 옵션'으로 강제될 확률(%). 10/20/45 (blacksmith_upgrade.md §6).
-            smithEye = { key = "smithEye", name = "대장장이의 눈", type = "validOption",
-                applyTarget = "RollLine", desc = "현재 무기의 유효 옵션 등장 확률 증가",
-                stages = {10, 20, 45}, icon = "2c87d6385a60420ab55fa8d36ff3d6dc" },  -- 감정 돋보기
-            -- 가격 협상: 무기 구매가 감소, 게임 끝까지 유지 (§6, 적용=RequestBuyItem)
-            --   stages = 구매가 감소율(%). 10/18/40 (blacksmith_upgrade.md §6).
-            priceNego = { key = "priceNego", name = "가격 협상", type = "buyCost",
-                applyTarget = "RequestBuyItem", desc = "무기 구매가 감소",
-                stages = {10, 18, 40}, icon = "0bc56bdb2ba54b3dbdf43ff07cddb57f" },  -- 돈 주머니
-            -- 위험 거래: 상환 이자 증가 + 판매가 증가(고위험 고수익) (§6, 적용=Pricing+Debt)
-            --   stages = 판매가/상환이자 동시 증가율(%). 10/20/30.
-            riskyDeal = { key = "riskyDeal", name = "위험 거래", type = "riskReward",
-                applyTarget = "Pricing+Debt", desc = "상환 이자 증가, 대신 판매가 증가",
-                stages = {10, 20, 30}, icon = "8114bc5eeba544989e14a8e46a1ea0f2" },  -- 시한폭탄
-        }
+	method integer GetDebtAmount(integer stage)
+		        -- 상환 단계(주차)별 금액(1부터). debtTable 범위를 넘으면 매주 ×debtGrowth(10% 증가), 1000단위 반올림.
+		        -- (finance_management.md 상환액 스케줄 SSOT)
+		        local d = self:GetData()
+		        if stage < 1 then return 0 end
+		        local n = #d.debtTable
+		        if stage <= n then return d.debtTable[stage] end
+		        local amount = d.debtTable[n] * (d.debtGrowth ^ (stage - n))
+		        return math.floor(amount / 1000 + 0.5) * 1000
+	end
 
-        -- ── 재정 관리 (finance_management.md) ─────────────────────────────────────
-        -- 메소 대출 서비스 (§2·§3, 필수 구현). 사용 횟수는 확정값 1회.
-        --   대출 금액은 고정값이 아니라 '현재 상환 필요 메소'에 동적 연동한다(유저 확정):
-        --   지급 메소 = 현재 상환 필요 메소, 빚도 그만큼 증가 → 상환 시 '상환금 + 빚'을 한 번에 청구.
-        --   (금액 계산은 GameManager:GetCurrentRepayment(). 여기선 사용 횟수 제한만 상수로 둔다.)
-        d.loan = {
-            maxUses = 1,          -- 한 게임당 대출 가능 횟수 (확정: 1회)
-        }
-        -- 골드리치 은행 저축 (§6~§8, 후순위 — 데이터만 준비, 로직은 미구현).
-        --   '하루' = 상환 주기 1회(= DebtStage 증가) 기준(A안: 일차 = DebtStage+1).
-        d.savings = {
-            minDeposit = 10000,   -- 최소 저축 금액 (§8)
-            dailyRate = 5,        -- 상환 1회(하루)당 이자율(%) (§8)
-        }
+	method any GetAugment(string key)
+		        -- 증강 1종 정의 반환(name/type/applyTarget/stages). 알 수 없는 key면 nil.
+		        return self:GetData().augments[key]
+	end
 
-        self.Data = d
-    end
+	method any GetAugmentOrder()
+		        -- 증강 표시/추첨 순서 key 배열.
+		        return self:GetData().augmentOrder
+	end
 
-    method any GetData()
-        -- 전체 설정 테이블 반환(지연 구축).
-        if self.Data == nil then self:BuildData() end
-        return self.Data
-    end
+	method number GetAugmentStageValue(string key, integer stage)
+		        -- 증강의 특정 단계 효과 수치 반환. 단계 범위를 벗어나면 클램프. 없으면 0.
+		        local a = self:GetData().augments[key]
+		        if a == nil then return 0 end
+		        local n = #a.stages
+		        if stage < 1 then return 0 end
+		        if stage > n then stage = n end
+		        return a.stages[stage]
+	end
 
-    method any GetEquipment(string id)
-        -- 장비 1종 정의 반환. 알 수 없는 id면 nil.
-        return self:GetData().equipment[id]
-    end
+	method integer GetAugmentCost(integer stage)
+		        -- 증강 구매 비용(도달할 단계 기준). 서버·클라 공용(클라 가격 표시용, ExecSpace 없음).
+		        --   stage = 이 구매로 도달하는 단계(현재단계+1). 범위 밖은 마지막 값으로 클램프. (blacksmith_upgrade.md §3)
+		        local costs = self:GetData().augmentCosts
+		        local n = #costs
+		        if stage < 1 then stage = 1 end
+		        if stage > n then stage = n end
+		        return costs[stage]
+	end
 
-    method any GetEquipmentOrder()
-        -- 구매/표시 순서의 장비 id 배열.
-        return self:GetData().equipmentOrder
-    end
+	method any GetLoanConfig()
+		        -- 메소 대출 상수(payout/repayMultiplier/maxUses).
+		        return self:GetData().loan
+	end
 
-    method any GetWeaponGrade(string key)
-        -- 무기 등급 1종 정의 반환(basePrice/buyCost/color/label). 알 수 없는 key면 nil.
-        return self:GetData().weaponGrades[key]
-    end
-
-    method any GetCube(string key)
-        -- 큐브 1종 정의 반환(cost/allowDestroy/icon/label). 알 수 없는 key면 nil.
-        return self:GetData().cubes[key]
-    end
-
-    method any GetWeaponGradeOrder()
-        -- 무기 등급 표시/추첨 순서 배열(낮은 등급 → 높은 등급).
-        return self:GetData().weaponGradeOrder
-    end
-
-    method any GetShopGradeProbTable(integer betterGoodsStage)
-        -- 상점 등급 확률표 반환 {gradeKey=확률(%)}. (blacksmith_upgrade.md §6)
-        --   0단계(미보유) = weaponGrades.prob 기본표, 1~3단계 = betterGoodsGradeProb 절대 확률표.
-        --   범위 초과 단계는 최대 단계 표로 클램프. 각 표의 합은 100이라 값이 곧 %다.
-        local d = self:GetData()
-        if betterGoodsStage >= 1 then
-            local n = #d.betterGoodsGradeProb
-            local stage = betterGoodsStage
-            if stage > n then stage = n end
-            return d.betterGoodsGradeProb[stage]
-        end
-        local base = {}
-        for _, key in ipairs(d.weaponGradeOrder) do
-            base[key] = d.weaponGrades[key].prob
-        end
-        return base
-    end
-
-    method any RollWeaponGradeDetail(integer betterGoodsStage)
-        -- 등급 확률표로 무기 등급 1개를 추첨하고 추첨 상세를 반환한다(서버 권위 추첨에서 호출).
-        -- betterGoodsStage: 증강 '더 좋은 물품' 보유 단계(0=미보유). 단계별 절대 확률표를 사용한다.
-        --   가중치를 재정규화해 확률로 환산하므로 표의 합이 100이 아니어도 동작한다(0 가중치 허용).
-        -- 반환: { grade = 등급 key, roll = 실제 뽑힌 랜덤 값(0~total), total = 가중치 총합(보통 100) }
-        --   roll은 등급 누적 구간과 비교해 "몇이 떠서 이 등급이 나왔는지" 로그 표기에 쓰인다.
-        local d = self:GetData()
-        local weights = self:GetShopGradeProbTable(betterGoodsStage)
-        local total = 0
-        for _, key in ipairs(d.weaponGradeOrder) do
-            total = total + weights[key]
-        end
-        if total <= 0 then
-            return { grade = d.weaponGradeOrder[1], roll = 0, total = 0 }
-        end
-        local roll = _UtilLogic:RandomDouble() * total
-        local acc = 0
-        for _, key in ipairs(d.weaponGradeOrder) do
-            acc = acc + weights[key]
-            if roll <= acc then
-                return { grade = key, roll = roll, total = total }
-            end
-        end
-        return { grade = d.weaponGradeOrder[#d.weaponGradeOrder], roll = roll, total = total }  -- 폴백(부동소수 오차 대비)
-    end
-
-    method string RollWeaponGrade(integer betterGoodsStage)
-        -- 등급 key만 필요한 호출부용 래퍼(분포 테스트 등). 상세는 RollWeaponGradeDetail 참조.
-        local r = self:RollWeaponGradeDetail(betterGoodsStage)
-        return r.grade
-    end
-
-    method number GetGradeMultiplier(string grade)
-        -- 등급 판매가 배수.
-        return self:GetData().gradeMult[grade]
-    end
-
-    method number GetBonusMultiplier(integer count)
-        -- 유효 이탈 개수별 배수 (0~3 범위로 클램프).
-        local t = self:GetData().bonusMult
-        if count > 3 then count = 3 end
-        if count < 0 then count = 0 end
-        return t[count]
-    end
-
-    method boolean IsValidMain(string equipId, string optionName)
-        -- 주요 옵션이 해당 장비에 유효한지 판정. 보스공격력(BATK)은 항상 유효. (pricing §8)
-        local eq = self:GetEquipment(equipId)
-        if eq == nil then return false end
-        local opt = self:GetData().mainOptions[optionName]
-        if opt == nil then return false end
-        if opt.group == "MainStat" then
-            return optionName == eq.stat
-        elseif opt.group == "Attack" then
-            for _, a in ipairs(eq.atk) do
-                if a == optionName then return true end
-            end
-            return false
-        end
-        return false
-    end
-
-    method integer GetDebtAmount(integer stage)
-        -- 상환 단계(주차)별 금액(1부터). debtTable 범위를 넘으면 매주 ×debtGrowth(10% 증가), 1000단위 반올림.
-        -- (finance_management.md 상환액 스케줄 SSOT)
-        local d = self:GetData()
-        if stage < 1 then return 0 end
-        local n = #d.debtTable
-        if stage <= n then return d.debtTable[stage] end
-        local amount = d.debtTable[n] * (d.debtGrowth ^ (stage - n))
-        return math.floor(amount / 1000 + 0.5) * 1000
-    end
-
-    method any GetAugment(string key)
-        -- 증강 1종 정의 반환(name/type/applyTarget/stages). 알 수 없는 key면 nil.
-        return self:GetData().augments[key]
-    end
-
-    method any GetAugmentOrder()
-        -- 증강 표시/추첨 순서 key 배열.
-        return self:GetData().augmentOrder
-    end
-
-    method number GetAugmentStageValue(string key, integer stage)
-        -- 증강의 특정 단계 효과 수치 반환. 단계 범위를 벗어나면 클램프. 없으면 0.
-        local a = self:GetData().augments[key]
-        if a == nil then return 0 end
-        local n = #a.stages
-        if stage < 1 then return 0 end
-        if stage > n then stage = n end
-        return a.stages[stage]
-    end
-
-    method integer GetAugmentCost(integer stage)
-        -- 증강 구매 비용(도달할 단계 기준). 서버·클라 공용(클라 가격 표시용, ExecSpace 없음).
-        --   stage = 이 구매로 도달하는 단계(현재단계+1). 범위 밖은 마지막 값으로 클램프. (blacksmith_upgrade.md §3)
-        local costs = self:GetData().augmentCosts
-        local n = #costs
-        if stage < 1 then stage = 1 end
-        if stage > n then stage = n end
-        return costs[stage]
-    end
-
-    method any GetLoanConfig()
-        -- 메소 대출 상수(payout/repayMultiplier/maxUses).
-        return self:GetData().loan
-    end
 end
