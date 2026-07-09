@@ -162,7 +162,7 @@ script BlacksmithConfig extends Logic
 		            --   stages = 주요 옵션 1줄이 '유효 옵션'으로 강제될 확률(%). 10/20/45 (blacksmith_upgrade.md §6).
 		            smithEye = { key = "smithEye", name = "대장장이의 눈", type = "validOption",
 		                applyTarget = "RollLine", desc = "현재 무기의 유효 옵션 등장 확률 증가",
-		                stages = {10, 20, 45}, icon = "2c87d6385a60420ab55fa8d36ff3d6dc" },  -- 감정 돋보기
+		                stages = {15, 30, 45}, icon = "2c87d6385a60420ab55fa8d36ff3d6dc" },  -- 감정 돋보기
 		            -- 가격 협상: 무기 구매가 감소, 게임 끝까지 유지 (§6, 적용=RequestBuyItem)
 		            --   stages = 구매가 감소율(%). 10/18/40 (blacksmith_upgrade.md §6).
 		            priceNego = { key = "priceNego", name = "가격 협상", type = "buyCost",
@@ -172,7 +172,7 @@ script BlacksmithConfig extends Logic
 		            --   stages = 판매가/상환이자 동시 증가율(%). 10/20/30.
 		            riskyDeal = { key = "riskyDeal", name = "위험 거래", type = "riskReward",
 		                applyTarget = "Pricing+Debt", desc = "상환 이자 증가, 대신 판매가 증가",
-		                stages = {10, 20, 30}, icon = "8114bc5eeba544989e14a8e46a1ea0f2" },  -- 시한폭탄
+		                stages = {10, 18, 30}, icon = "8114bc5eeba544989e14a8e46a1ea0f2" },  -- 시한폭탄
 		        }
 		
 		        -- ── 재정 관리 (finance_management.md) ─────────────────────────────────────
