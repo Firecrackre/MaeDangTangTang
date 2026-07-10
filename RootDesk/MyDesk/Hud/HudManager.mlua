@@ -13,10 +13,12 @@ script HudManager extends Logic
     property Entity hudRoot = "c33fb761-361b-4fbe-80ca-14d3dc76e420"                    -- HudGroup 루트(맵 게이팅 대상)
     property Entity timerRoot = "579e17d5-436d-4891-83ec-1b0680a220e7"                  -- 좌상단 라디얼 시계 루트(흔들림 대상)
     property SpriteGUIRendererComponent timerFill = "f98da801-6b53-4fc8-b737-6a25ec2867f7"  -- 라디얼 채움(FillAmount)
+    property UITransformComponent timerHandle = "21bf008a-ba5d-4780-8625-db461d74dc86"      -- 라디얼 시계 분침(ZRotation 회전)
     property TextComponent timerLabel = "02268e21-ec76-4f41-bd49-bb19c7c53018"          -- 중앙 "n/5" 라벨
     property CanvasGroupComponent timerLabelCanvas = "02268e21-ec76-4f41-bd49-bb19c7c53018" -- 위와 같은 엔티티(깜빡 알파용)
     property TextComponent mesoText = "02481a8c-1e99-4a11-9c52-16c10bd14652"            -- 우상단 현재 소유 메소
     property TextComponent repayText = "11dd3c0d-7633-49af-bb75-5ef36085be80"           -- 우상단 상환 필요 메소
+    property TextComponent weekText = "c3d97066-c15a-46cd-9da4-a220ca6b28cf"            -- 라디얼 시계 "N주차" 라벨(TimerCurrentWeek)
 
     -- 재정 관리: 대출 빚 표시 박스 + 대출 유도 슬라이드 팝업(UUID는 UIBuilder write({bind})로 주입).
     property Entity debtBox = "1a39278a-8f91-428c-9e34-29c2e3d894d7"          -- '현재 빚' 박스 루트(Debt>0일 때만 Enable)
@@ -30,6 +32,14 @@ script HudManager extends Logic
     property Vector2 timerBasePos = Vector2(0, 0)
     property string lastClockKey = ""
     property string lastHudKey = ""
+    property string lastWeekKey = ""
+
+    -- 라디얼 시계 분침(TimerHandle) 회전 상태.
+    --   used=0(12시 기준) → handleBaseZ. 1/5칸마다 시계방향으로 handleTurnDeg/maxCubes 만큼 회전.
+    --   Rotate()가 반시계 양수 규약이므로 시계방향 = ZRotation 감소(handleClockwiseSign=-1).
+    property number handleBaseZ = 180         -- used=0일 때 ZRotation(12시). OnBeginPlay에서 .ui 저작값으로 재캡처.
+    property number handleTurnDeg = 360        -- 한 바퀴(=maxCubes칸) 총 회전각
+    property number handleClockwiseSign = -1   -- 시계방향(-1) / 반시계(1)
 
     -- 대출 유도 팝업 슬라이드 상태.
     --   박스 슬롯 규약(Hud 패널 기준, anchoredPosition.y): MesoBox 0 / RepayBox -84 / DebtBox -168.
@@ -55,6 +65,10 @@ script HudManager extends Logic
         self.warnTime = 0
         if isvalid(self.timerRoot) and isvalid(self.timerRoot.UITransformComponent) then
             self.timerBasePos = self.timerRoot.UITransformComponent.anchoredPosition
+        end
+        -- 분침의 저작된 현재 각도를 used=0(12시) 기준점으로 캡처(아트가 올려둔 포즈를 그대로 12시로 삼음).
+        if isvalid(self.timerHandle) then
+            self.handleBaseZ = self.timerHandle.ZRotation
         end
         -- 게이팅 초기화: 시작 시 HUD를 명시적으로 끈다(변화감지 가드가 초기 상태를 못 잡는 gotcha 회피).
         if isvalid(self.hudRoot) then self.hudRoot.Enable = false end
@@ -106,6 +120,7 @@ script HudManager extends Logic
         if not onInGame then return end
 
         self:UpdateClock()
+        self:UpdateWeek()
         self:UpdateHud()
         self:UpdateDebt()
         self:UpdateWarningFX(delta)
@@ -123,8 +138,26 @@ script HudManager extends Logic
         if isvalid(self.timerFill) then
             self.timerFill.FillAmount = used / self.maxCubes
         end
+        -- 분침: 0/5 = 12시(handleBaseZ), 1/5칸마다 시계방향으로 handleTurnDeg/maxCubes 만큼 회전.
+        if isvalid(self.timerHandle) then
+            local frac = used / self.maxCubes
+            self.timerHandle.ZRotation = self.handleBaseZ + self.handleClockwiseSign * self.handleTurnDeg * frac
+        end
         if isvalid(self.timerLabel) then
             self.timerLabel.Text = tostring(used) .. "/" .. tostring(self.maxCubes)
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateWeek()
+        -- "N주차" 라벨. 일차/주차 = DebtStage + 1 (A안, 서버 GetCurrentDay와 동일 규약).
+        --   DebtStage는 @Sync라 클라가 직접 계산. 상환 성공(DebtStage++)마다 문구가 바뀐다.
+        local day = _GameManager.DebtStage + 1
+        local key = tostring(day)
+        if key == self.lastWeekKey then return end
+        self.lastWeekKey = key
+        if isvalid(self.weekText) then
+            self.weekText.Text = tostring(day) .. "주차"
         end
     end
 

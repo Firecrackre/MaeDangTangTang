@@ -1,0 +1,23 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "sprite://3b1c8070ac814f10b3e8197ee34d76d9",
+  "ContentType": "x-mod/sprite",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "upload_keyname": "b0/fc/b0fc988fce064d9188c34262a31970e1/sprite/3b1c8070ac814f10b3e8197ee34d76d9/639192876292764789",
+      "upload_hash": "502CCBF948B732B29DC1A7329BF44D3E6788EF96E5FB68664D7216868D981974",
+      "name": "ClockHand",
+      "resource_guid": "3b1c8070ac814f10b3e8197ee34d76d9",
+      "resource_version": "6a50f64d7202b22c1126a473"
+    }
+  }
+}

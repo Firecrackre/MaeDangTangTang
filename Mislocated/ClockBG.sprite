@@ -1,0 +1,23 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "sprite://652c8b0e93884a66a4b93f65449bd706",
+  "ContentType": "x-mod/sprite",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "upload_keyname": "b0/fc/b0fc988fce064d9188c34262a31970e1/sprite/652c8b0e93884a66a4b93f65449bd706/639192876292788595",
+      "upload_hash": "6EFB5DF7DB6DAA448D26BDE3981A1AF86828BCEAC4459FE35EBB10B274B22C3A",
+      "name": "ClockBG",
+      "resource_guid": "652c8b0e93884a66a4b93f65449bd706",
+      "resource_version": "6a50f64d6a6678658ad11769"
+    }
+  }
+}

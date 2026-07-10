@@ -62,8 +62,9 @@
           "@components": [
             {
               "@type": "MOD.Core.BackgroundComponent",
+              "SpriteRUID": "102dd108d00b4755adff53f082bbde23",
               "TemplateRUID": "794ad8421e2543d8a6d2c70307637450",
-              "Type": 1,
+              "Type": 5,
               "Enable": true
             }
           ],
