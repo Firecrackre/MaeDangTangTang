@@ -94,11 +94,16 @@ script BlacksmithConfig extends Logic
 		        --   구매한 등급의 basePrice/buyCost를 사용한다. 여기 값은 등급 정보가 없을 때의 폴백으로만 남겨둔다.
 		        -- icon: 아바타 무기 아이템 RUID(상점 아이콘). 렌더 시 "thumbnail://" 접두사를 붙인다(avataritem 규칙).
 		        d.equipment = {
-		            sword  = { id = "sword",  label = "검",     stat = "STR", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000, icon = "2f92c17d771e4b1d887b3e58ecfab6bf" },
-		            bow    = { id = "bow",    label = "활",     stat = "DEX", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000, icon = "0b85f005a25241189d274e61c5df0cdd" },
-		            staff  = { id = "staff",  label = "스태프", stat = "INT", atk = {"MATK", "BATK"}, basePrice = 100000, buyCost = 40000, icon = "989be911209545fdacf84f92874cb338" },
-		            wand   = { id = "wand",   label = "완드",   stat = "INT", atk = {"MATK", "BATK"}, basePrice = 50000,  buyCost = 18000, icon = "133e697ac731441a912f1e58ec2a9182" },
-		            dagger = { id = "dagger", label = "단도",   stat = "LUK", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000, icon = "11ccce1ca9224050897b2d59fe14a3bf" },
+		            sword  = { id = "sword",  label = "검",     stat = "STR", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000, icon = "2f92c17d771e4b1d887b3e58ecfab6bf",
+                gradeIcons = { Common = "74ee6047ee0142b281f17c905219eb4b", Rare = "cb774c76c3a54b3f8983eee569100fb8", Epic = "663ced1bf5544d2096cc33d5976e77c4", Unique = "acb65b187f21498d9ad1905359f2f759", Legendary = "23f591e794a8487298d8e5ee9a3a7727" } },  -- ⭐토트훈련용검/영웅글라디우스/프라우테/우트가르드세이버/앱솔랩스세이버
+		            bow    = { id = "bow",    label = "활",     stat = "DEX", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000, icon = "0b85f005a25241189d274e61c5df0cdd",
+                gradeIcons = { Common = "67ce4147813d49f5975917ee86777950", Rare = "d1df8ca59a99400c97a98668c183b283", Epic = "ed83963681d448f08ecad5d78292d08e", Unique = "e9bf79c342e140ebaba882422cbe56fa", Legendary = "18d80518f407457aa489da97c5fead0d" } },  -- 사냥꾼의활/레드바이퍼/드래곤샤인보우/팍스반레온보우/파프니르윈드체이서
+		            staff  = { id = "staff",  label = "스태프", stat = "INT", atk = {"MATK", "BATK"}, basePrice = 100000, buyCost = 40000, icon = "989be911209545fdacf84f92874cb338",
+                gradeIcons = { Common = "7380b5e5754a4e338e65fa232a8a095b", Rare = "2425d40177814d208b56b2a8dac4be1c", Epic = "f7349a239ce946419f936edd91ea8eec", Unique = "91da8c2fa81945a68ae9c13f9f8553dc", Legendary = "eb8d8b0ad5ae482facb6f6b6bfb7ef89" } },  -- ⭐나무스태프/메이플스태프/⭐10주년블랙스태프/네크로로드/마이스터배틀스태프
+		            wand   = { id = "wand",   label = "완드",   stat = "INT", atk = {"MATK", "BATK"}, basePrice = 50000,  buyCost = 18000, icon = "133e697ac731441a912f1e58ec2a9182",
+                gradeIcons = { Common = "8b30dd5dc3e24064ad96799b4587ae5a", Rare = "a5dc4044efcd429cb053cf30b11f4d4b", Epic = "d8bc9682c6a849ab941993a36c0e7e5c", Unique = "78827f2a06c3403a9e0d78e8da58d402", Legendary = "0de959f44ddb4a7c8ab39c9db557d37b" } },  -- 하드우드완드/이블테일러/드래곤완드/우트가르드완드/아케인셰이드완드
+		            dagger = { id = "dagger", label = "단도",   stat = "LUK", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000, icon = "11ccce1ca9224050897b2d59fe14a3bf",
+                gradeIcons = { Common = "623edb37903f49b5acb1517bb550d1fb", Rare = "77a92b6db90b458aa7bd60f203e061ca", Epic = "1965573dd25047c9a6ec6f6f42a298dd", Unique = "df8f87efb85e4df8afd56bda71b29a44", Legendary = "dac4563ba6ca4aa4a5cae9a93a6fcd66" } },  -- 필드대거/베즐러드/블러드대거/⭐녹스반레온대거/⭐앱솔랩스슬래셔
 		        }
 		        d.equipmentOrder = {"bow", "wand", "sword", "dagger", "staff"}
 		
@@ -207,6 +212,17 @@ script BlacksmithConfig extends Logic
 	method any GetEquipmentOrder()
 		        -- 구매/표시 순서의 장비 id 배열.
 		        return self:GetData().equipmentOrder
+	end
+
+	method string GetWeaponIcon(string equipId, string grade)
+		        -- 무기 아이콘 RUID(표시용 SSOT): 등급별 아이콘(gradeIcons) 우선, 없으면 종류 기본 icon 폴백.
+		        --   렌더 사이트(상점 슬롯/상세/판매 결과창)가 이 값을 "thumbnail://" 접두사와 함께 사용한다.
+		        local eq = self:GetEquipment(equipId)
+		        if eq == nil then return "" end
+		        if eq.gradeIcons ~= nil and grade ~= nil and eq.gradeIcons[grade] ~= nil then
+		            return eq.gradeIcons[grade]
+		        end
+		        return eq.icon
 	end
 
 	method any GetWeaponGrade(string key)

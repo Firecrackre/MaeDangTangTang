@@ -1224,7 +1224,8 @@ script ScratchTicketManager extends Component
         local eq = _BlacksmithConfig:GetEquipment(_GameManager.PendingSaleItemId)
         if eq ~= nil and isvalid(self.saleWeaponIcon) then
             local spr = self.saleWeaponIcon.SpriteGUIRendererComponent
-            if isvalid(spr) then spr.ImageRUID = "thumbnail://" .. eq.icon end
+            -- 등급별 아이콘: 판매 확정 시점에도 CurrentWeaponGrade 유효(수령 전까지 유지). GetWeaponIcon SSOT.
+            if isvalid(spr) then spr.ImageRUID = "thumbnail://" .. _BlacksmithConfig:GetWeaponIcon(_GameManager.PendingSaleItemId, _GameManager.CurrentWeaponGrade) end
         end
         if isvalid(self.saleSoldText) then
             self.saleSoldText.Text = self:Comma(_GameManager.PendingSalePrice) .. " 메소에\n판매되었습니다!"

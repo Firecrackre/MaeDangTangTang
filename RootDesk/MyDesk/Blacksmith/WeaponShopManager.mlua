@@ -673,7 +673,7 @@ script WeaponShopManager extends Logic
 		        -- 아이콘(아바타 무기 아이템 → thumbnail:// 접두사 필요).
 		        local iconEntity = slot:GetChildByName("Icon", false)
 		        if isvalid(iconEntity) and isvalid(iconEntity.SpriteGUIRendererComponent) then
-		            iconEntity.SpriteGUIRendererComponent.ImageRUID = "thumbnail://" .. eq.icon
+		            iconEntity.SpriteGUIRendererComponent.ImageRUID = "thumbnail://" .. _BlacksmithConfig:GetWeaponIcon(equipId, grade)
 		        end
 
 		        self:SetChildText(slot, "Name", wg.label .. " " .. eq.label)
@@ -693,7 +693,7 @@ script WeaponShopManager extends Logic
 		        if eq == nil or wg == nil then return end
 
 		        if isvalid(self.detailIcon) then
-		            self.detailIcon.ImageRUID = "thumbnail://" .. eq.icon
+		            self.detailIcon.ImageRUID = "thumbnail://" .. _BlacksmithConfig:GetWeaponIcon(s.equipId, s.grade)
 		        end
 		        if isvalid(self.detailDesc) then
 		            self.detailDesc.Text = self:BuildDesc(eq, wg)
