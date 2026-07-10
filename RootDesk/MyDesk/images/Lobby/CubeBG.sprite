@@ -1,0 +1,23 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "sprite://ed5e0393c903458db295c43477c172c0",
+  "ContentType": "x-mod/sprite",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "upload_keyname": "b0/fc/b0fc988fce064d9188c34262a31970e1/sprite/ed5e0393c903458db295c43477c172c0/639192933298795262",
+      "upload_hash": "F9761619D7D68E4B05C395740F14B04E359A76E9D55C0A2477C70FC82C90868A",
+      "name": "CubeBG",
+      "resource_guid": "ed5e0393c903458db295c43477c172c0",
+      "resource_version": "6a510c91c66d72d4c09d1be6"
+    }
+  }
+}

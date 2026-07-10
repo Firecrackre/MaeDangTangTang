@@ -12,10 +12,18 @@ script TitleManager extends Logic
     property Entity titleRoot = "3945432a-ca05-4c0b-83ad-3192a69c7f4d"         -- 그룹 루트(맵 게이팅 시 Enable 토글 대상)
     property ButtonComponent startButton = "201cd016-ee20-4b72-ad21-81f7f2e81e2e" -- 전체화면 시작 버튼
     property TextComponent startText = "6e90ab37-f4bc-4a37-9d15-ce186a3e19e0"      -- "화면을 클릭하여 시작"(깜빡임)
+    property UITransformComponent logoTransform = "7f5f6b50-c9e8-4781-ac95-3117e97cbd6f" -- Logo(둥실둥실 부유 연출)
+
+    -- 로고 부유 연출 튜닝값(인스펙터에서 조정).
+    property number LogoFloatAmplitude = 6   -- 위아래 진폭(px)
+    property number LogoFloatPeriod = 3.0    -- 한 사이클 주기(초)
 
     property boolean isActive = false
     property boolean moving = false
     property number blinkTime = 0
+    property number logoFloatTime = 0
+    property Vector2 logoBasePos = Vector2(0, 0)
+    property boolean logoBaseCaptured = false
     property any startHandler = nil
 
     @ExecSpace("ClientOnly")
@@ -24,8 +32,14 @@ script TitleManager extends Logic
         self.isActive = false
         self.moving = false
         self.blinkTime = 0
+        self.logoFloatTime = 0
         if isvalid(self.titleRoot) then
             self.titleRoot.Enable = false
+        end
+        -- 로고 기준 위치 캡처(부유 오프셋은 매 프레임 이 값 기준으로 계산 → 누적 드리프트 없음).
+        if isvalid(self.logoTransform) then
+            self.logoBasePos = self.logoTransform.anchoredPosition
+            self.logoBaseCaptured = true
         end
         if isvalid(self.startButton) then
             self.startHandler = self.startButton.Entity:ConnectEvent(ButtonClickEvent, self.OnStartClicked)
@@ -60,6 +74,17 @@ script TitleManager extends Logic
         if isvalid(self.startText) then
             local a = (math.sin(self.blinkTime * 3.0) + 1) * 0.5  -- 0~1
             self.startText.FontColor = Color(1, 0.905, 0.69, 0.35 + a * 0.65)
+        end
+
+        -- 로고 둥실둥실 부유(사인 곡선, 기준 위치 + 오프셋).
+        if self.logoBaseCaptured and isvalid(self.logoTransform) and self.LogoFloatPeriod > 0 then
+            self.logoFloatTime = self.logoFloatTime + delta
+            local offsetY = math.sin(self.logoFloatTime * 2 * math.pi / self.LogoFloatPeriod) * self.LogoFloatAmplitude
+            self.logoTransform.anchoredPosition = Vector2(self.logoBasePos.x, self.logoBasePos.y + offsetY)
+            if self._T.floatLogged ~= true then
+                self._T.floatLogged = true
+                log("[TitleManager] logo float active. base=(" .. tostring(self.logoBasePos.x) .. "," .. tostring(self.logoBasePos.y) .. ") amp=" .. tostring(self.LogoFloatAmplitude) .. " period=" .. tostring(self.LogoFloatPeriod))
+            end
         end
     end
 

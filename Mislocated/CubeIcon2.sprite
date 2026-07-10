@@ -1,0 +1,23 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "sprite://33d6256743974d8f87950c8fb61656d8",
+  "ContentType": "x-mod/sprite",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "upload_keyname": "b0/fc/b0fc988fce064d9188c34262a31970e1/sprite/33d6256743974d8f87950c8fb61656d8/639192960015274838",
+      "upload_hash": "0A36FD69C0F12B4B199892401349C685EBCED95DCDA69FA8885A93EEDE5C6A2B",
+      "name": "CubeIcon2",
+      "resource_guid": "33d6256743974d8f87950c8fb61656d8",
+      "resource_version": "6a511701b7475db272b72750"
+    }
+  }
+}

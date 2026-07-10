@@ -42,12 +42,12 @@ script HudManager extends Logic
     property number handleClockwiseSign = -1   -- 시계방향(-1) / 반시계(1)
 
     -- 대출 유도 팝업 슬라이드 상태.
-    --   박스 슬롯 규약(Hud 패널 기준, anchoredPosition.y): MesoBox 0 / RepayBox -84 / DebtBox -168.
-    --   팝업 목표 y: 빚 없으면 RepayBox 아래(-168), 빚 있으면 DebtBox 아래(-252).
-    --   숨김 y = 목표 y + 84 → 바로 위 박스 뒤에 겹쳐 숨었다가 스르륵 내려온다.
-    property number popupSlotH = 84         -- 박스 한 칸 높이(74) + 간격(10)
+    --   박스 슬롯 규약(Hud 패널 기준, anchoredPosition.y): MesoBox 0 / RepayBox -70 / DebtBox -140.
+    --   팝업 목표 y: 빚 없으면 RepayBox 아래(-140), 빚 있으면 DebtBox 아래(-210).
+    --   숨김 y = 목표 y + 70 → 바로 위 박스 뒤에 겹쳐 숨었다가 스르륵 내려온다.
+    property number popupSlotH = 70         -- 박스 한 칸 높이(63) + 간격(7)
     property number popupSpeed = 400        -- 슬라이드 속도(px/s)
-    property number popupY = -84            -- 현재 팝업 y(초기 = 빚 없을 때 숨김 위치)
+    property number popupY = -70            -- 현재 팝업 y(초기 = 빚 없을 때 숨김 위치)
     property boolean loanPopupActive = false -- 등장/체류/퇴장 애니메이션 진행 중 여부
     property any loanPopupHandler = nil
     -- 게임오버(weapon/cube) 사슬 연출 동안 팝업 강제 표시(GameOverManager:SetForceLoanPopup).
@@ -75,7 +75,7 @@ script HudManager extends Logic
 
         -- 대출 유도 팝업 초기화: 숨김 위치로 스냅 + 비활성. 클릭 시 재정 관리 진입.
         self.loanPopupActive = false
-        self.popupY = -self.popupSlotH  -- 빚 없을 때 숨김 y(= -84)
+        self.popupY = -self.popupSlotH  -- 빚 없을 때 숨김 y(= -70)
         if isvalid(self.loanPopup) then
             self.loanPopup.Enable = false
             self.loanPopupHandler = self.loanPopup:ConnectEvent(ButtonClickEvent, self.OnLoanPopupClicked)
@@ -175,7 +175,7 @@ script HudManager extends Logic
         self.lastHudKey = key
 
         if isvalid(self.mesoText) then
-            self.mesoText.Text = "현재 소유 메소: " .. self:Comma(meso)
+            self.mesoText.Text = self:Comma(meso) .. "G"
             if meso >= needTotal then
                 self.mesoText.FontColor = Color(0.3, 0.85, 0.3, 1)   -- 충분 → 초록
             else
@@ -183,7 +183,7 @@ script HudManager extends Logic
             end
         end
         if isvalid(self.repayText) then
-            self.repayText.Text = "상환 필요 메소: " .. self:Comma(required)
+            self.repayText.Text = self:Comma(required) .. "G"
         end
     end
 
@@ -255,17 +255,17 @@ script HudManager extends Logic
         local debt = _GameManager.Debt
         if isvalid(self.debtBox) then self.debtBox.Enable = debt > 0 end
         if isvalid(self.debtText) then
-            self.debtText.Text = "현재 빚 : " .. self:Comma(debt)
+            self.debtText.Text = self:Comma(debt) .. "G"
         end
     end
 
     @ExecSpace("ClientOnly")
     method void UpdateLoanPopup(number delta)
         -- 대출 유도 팝업을 상단 박스 뒤에서 스르륵 내리고(등장) 올린다(퇴장).
-        -- 목표 y: 빚 있으면 DebtBox 아래(-252), 없으면 RepayBox 아래(-168). 숨김 y = 목표 y + 84.
+        -- 목표 y: 빚 있으면 DebtBox 아래(-210), 없으면 RepayBox 아래(-140). 숨김 y = 목표 y + 70.
         if not isvalid(self.loanPopup) then return end
         local debt = _GameManager.Debt
-        local targetY = (debt > 0) and (-2 * self.popupSlotH - self.popupSlotH) or (-2 * self.popupSlotH)  -- -252 / -168
+        local targetY = (debt > 0) and (-2 * self.popupSlotH - self.popupSlotH) or (-2 * self.popupSlotH)  -- -210 / -140
         local hiddenY = targetY + self.popupSlotH
         local shown = self:WantLoanPopup()
         local ui = self.loanPopup.UITransformComponent

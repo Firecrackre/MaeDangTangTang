@@ -1,0 +1,23 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "sprite://e0de358844a245d8959501d910897e1a",
+  "ContentType": "x-mod/sprite",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "upload_keyname": "b0/fc/b0fc988fce064d9188c34262a31970e1/sprite/e0de358844a245d8959501d910897e1a/639192933298439515",
+      "upload_hash": "EEB869853E8C8F93DD192F17D2FADD52BB55118CF12B2EB6C32ACF9FCC7299A4",
+      "name": "SkillIcon",
+      "resource_guid": "e0de358844a245d8959501d910897e1a",
+      "resource_version": "6a510c91bd7b47da06e69df1"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "sprite://cfbd93ecdf6b4bd6a52fdb0382f6c0b3",
+  "ContentType": "x-mod/sprite",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "upload_keyname": "b0/fc/b0fc988fce064d9188c34262a31970e1/sprite/cfbd93ecdf6b4bd6a52fdb0382f6c0b3/639192933298362062",
+      "upload_hash": "4C2C8728C301858A1ED5930FC8DE2812903D286518AFE304B8F992CCC88C3BE2",
+      "name": "FinanceBG",
+      "resource_guid": "cfbd93ecdf6b4bd6a52fdb0382f6c0b3",
+      "resource_version": "6a510c917202b22c1126a98c"
+    }
+  }
+}

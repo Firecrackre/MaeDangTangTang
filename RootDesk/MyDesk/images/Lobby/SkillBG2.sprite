@@ -1,0 +1,23 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "sprite://b68631a0d1284755a69e06eb50c78997",
+  "ContentType": "x-mod/sprite",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "upload_keyname": "b0/fc/b0fc988fce064d9188c34262a31970e1/sprite/b68631a0d1284755a69e06eb50c78997/639192947183426750",
+      "upload_hash": "2B291327E1B50BB9B2CEA897FA45E0996CD0EA417514DCCA411BB5D10E87DA7B",
+      "name": "SkillBG2",
+      "resource_guid": "b68631a0d1284755a69e06eb50c78997",
+      "resource_version": "6a5111fe0050723f6955b040"
+    }
+  }
+}

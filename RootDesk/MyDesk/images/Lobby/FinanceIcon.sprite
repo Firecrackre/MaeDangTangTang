@@ -1,0 +1,23 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "sprite://1e1c00abb65b4114a168ee6eaddb81a0",
+  "ContentType": "x-mod/sprite",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "upload_keyname": "b0/fc/b0fc988fce064d9188c34262a31970e1/sprite/1e1c00abb65b4114a168ee6eaddb81a0/639192933298813960",
+      "upload_hash": "B89D4126C5A5CC229C3B5AA3E90BFB59909748DC390A6F2AFBAC199ADA4E23BB",
+      "name": "FinanceIcon",
+      "resource_guid": "1e1c00abb65b4114a168ee6eaddb81a0",
+      "resource_version": "6a510c91724f7c28569b3589"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "directory://6d830519d8ed4f298b9a3c19b1b764cd",
+  "ContentType": "x-mod/directory",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "entry_id": "directory://6d830519d8ed4f298b9a3c19b1b764cd",
+      "name": "Augment",
+      "lock": false,
+      "folding": false,
+      "nameEditable": true
+    }
+  }
+}
