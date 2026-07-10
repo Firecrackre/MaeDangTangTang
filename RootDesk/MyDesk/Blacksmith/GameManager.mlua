@@ -1,166 +1,420 @@
 @Logic
 script GameManager extends Logic
     -- 커닝시티 뒷골목 대장장이 — 플레이어 상태 관리자(서버 권위).
-    -- 메커톤 범위: 단일 플레이어 세션을 가정한 전역 상태.
-    --   (멀티플레이로 확장 시 userId별 상태 테이블 + @TargetUserSync로 교체)
-    -- 모든 상태 변경은 서버에서만 일어나고, @Sync로 클라이언트에 반영된다.
+    -- 멀티 클라이언트 대응: 서버 진실은 userId별 세션 테이블(self.Sessions)에만 존재한다.
+    --   아래 property들은 각 클라이언트의 "내 세션 미러" — 서버가 targeted Client RPC(ApplySessionState,
+    --   call-site 마지막 인자 = targetUserId)로 해당 유저에게만 밀어넣는다. @Sync(전 클라 브로드캐스트) 미사용.
+    -- 모든 상태 변경은 서버에서만 일어나고(클라 입력 불신), 각 Server RPC 말미의 PushState 1회로 미러가 갱신된다.
+    -- 클라이언트 UI는 기존처럼 이 property들을 폴링하면 된다(값이 "내 세션"만 반영).
 
-    @Sync property integer Meso = 0            -- 보유 메소
-    @Sync property string CurrentItemId = ""   -- 현재 보유 아이템(장비 id). 없으면 ""
-    @Sync property integer CubeUseCount = 0    -- 누적 큐브 사용 횟수 ([6])
-    @Sync property integer DebtStage = 0       -- 완료한 상환 단계 ([7])
-    @Sync property boolean IsGameOver = false  -- 게임 오버 여부 ([7])
+    property integer Meso = 0            -- 보유 메소
+    property string CurrentItemId = ""   -- 현재 보유 아이템(장비 id). 없으면 ""
+    property integer CubeUseCount = 0    -- 누적 큐브 사용 횟수 ([6])
+    property integer DebtStage = 0       -- 완료한 상환 단계 ([7])
+    property boolean IsGameOver = false  -- 게임 오버 여부 ([7])
     -- 게임오버 원인(게임오버 UI '사망 원인' 표시용). "" = 게임오버 아님.
     --   "repayment"=상환액 미지불 / "debt"=빚 미지불 / "weapon"=무기 살 돈 부족 / "cube"=큐브 살 돈 부족
-    @Sync property string GameOverReason = ""
+    property string GameOverReason = ""
     -- 승리 여부: 상환 winStage회(5주) 성공 시 true. (finance_management.md 승리 조건)
-    @Sync property boolean IsVictory = false
+    property boolean IsVictory = false
 
     -- 빚 상환 상태 (concept §6-3, flow §15·§16)
-    @Sync property integer CubesUntilRepayment = 0 -- 다음 상환까지 남은 큐브 횟수 ([6] HUD 표시용)
-    @Sync property boolean IsRepaymentDue = false  -- 상환 시점 도달(미납) 여부
-    @Sync property integer PendingRepayment = 0    -- 이번에 갚아야 할 금액
+    property integer CubesUntilRepayment = 0 -- 다음 상환까지 남은 큐브 횟수 ([6] HUD 표시용)
+    property boolean IsRepaymentDue = false  -- 상환 시점 도달(미납) 여부
+    property integer PendingRepayment = 0    -- 이번에 갚아야 할 금액
 
     -- 상점(무기 구매 UI) 상태.
-    --   ShopSlots: 서버 권위 슬롯 배열 {{equipId, grade}, ...} (중첩이라 @Sync 불가 → 서버 보관).
-    --   ShopSlotsData: 위 배열을 직렬화한 @Sync 문자열 "equipId:grade,equipId:grade,...". 클라가 파싱해 렌더.
-    property any ShopSlots = nil
-    @Sync property string ShopSlotsData = ""
+    --   ShopSlots(서버 세션 필드): 서버 권위 슬롯 배열 {{equipId, grade}, ...} (세션 테이블에 보관).
+    --   ShopSlotsData: 위 배열을 직렬화한 미러 문자열 "equipId:grade,equipId:grade,...". 클라가 파싱해 렌더.
+    property string ShopSlotsData = ""
 
     -- 구매한 아이템의 무기 등급 정보(상점 등급 = 기본 판매가 티어). 판매가 계산의 base로 사용.
-    @Sync property integer CurrentBasePrice = 0    -- 현재 아이템의 기본 판매가(구매 등급 basePrice)
-    @Sync property string CurrentWeaponGrade = ""  -- 현재 아이템의 무기 등급 key(Common/Rare/Epic/Unique/Legendary)
+    property integer CurrentBasePrice = 0    -- 현재 아이템의 기본 판매가(구매 등급 basePrice)
+    property string CurrentWeaponGrade = ""  -- 현재 아이템의 무기 등급 key(Common/Rare/Epic/Unique/Legendary)
 
-    -- 현재 아이템의 잠재 결과 요약(@Sync로 HUD가 읽음). 옵션 3줄 전체는 아래 CurrentPotential에 보관. (flow §8)
-    @Sync property boolean HasPotential = false      -- 현재 아이템에 큐브를 1회 이상 사용했는지
-    @Sync property string CurrentGrade = ""          -- 현재 잠재 등급(Rare/Epic/Unique/Legendary)
-    @Sync property string CurrentResultType = ""     -- 조합 판정 결과(연출용 RAW 문자열)
-    @Sync property integer CurrentPrice = 0          -- 현재 예상 판매가(파괴 시 0)
-    @Sync property boolean IsCurrentDestroyed = false -- 현재 아이템 파괴 여부 (flow §14)
+    -- 현재 아이템의 잠재 결과 요약(HUD가 읽음). 옵션 3줄 전체는 세션의 CurrentPotential에 보관. (flow §8)
+    property boolean HasPotential = false      -- 현재 아이템에 큐브를 1회 이상 사용했는지
+    property string CurrentGrade = ""          -- 현재 잠재 등급(Rare/Epic/Unique/Legendary)
+    property string CurrentResultType = ""     -- 조합 판정 결과(연출용 RAW 문자열)
+    property integer CurrentPrice = 0          -- 현재 예상 판매가(파괴 시 0)
+    property boolean IsCurrentDestroyed = false -- 현재 아이템 파괴 여부 (flow §14)
     -- 현재 판매가가 어떤 계산으로 나왔는지 사람이 읽는 수식 문자열(디버그/로그용). 파괴 시 "".
-    --   서버가 RequestUseCube에서 PricingCalculator breakdown으로 1회 조립 → @Sync로 클라(스크래치 로그)에 전달.
-    @Sync property string CurrentPriceFormula = ""
+    --   서버가 RequestUseCube에서 PricingCalculator breakdown으로 1회 조립 → 미러로 클라(스크래치 로그)에 전달.
+    property string CurrentPriceFormula = ""
 
-    -- 잠재 결과 전체(등급+옵션 3줄). 중첩 테이블이라 @Sync 불가 → 서버 권위 보관용.
-    property any CurrentPotential = nil
-
-    -- 옵션 3줄을 클라(스크래치 UI)에 전달하기 위한 @Sync 직렬화 문자열(ShopSlotsData와 동일 패턴).
+    -- 옵션 3줄을 클라(스크래치 UI)에 전달하기 위한 직렬화 문자열(ShopSlotsData와 동일 패턴).
     --   포맷: "grade;line;line;line", line = "label|value|unit|optionType|isBonus|isDestroy|isValid".
     --   isValid는 서버가 IsValidMain(현재장비, optionName)으로 계산(클라 신뢰 안 함). 없으면 "".
-    @Sync property string CurrentPotentialData = ""
+    property string CurrentPotentialData = ""
 
     -- ── 판매 통계(게임오버 기록용, flow §게임 오버 표시 정보) ──
-    @Sync property integer TotalSellCount = 0   -- 판매 성공 누적 횟수
-    @Sync property integer MaxSellPrice = 0     -- 한 번에 가장 비싸게 판 금액
+    property integer TotalSellCount = 0   -- 판매 성공 누적 횟수
+    property integer MaxSellPrice = 0     -- 한 번에 가장 비싸게 판 금액
 
     -- ── 2단계 판매(판매 확정 → 수령하기) (cube_scratch_system §11) ──
     --   판매 버튼 → RequestSellItem: 즉시 지급하지 않고 IsSalePending으로 전환(아이템/잠재 유지).
     --   판매 결과 창의 '수령하기' → RequestCollectSale: 이때 메소 지급 + 아이템 정리.
-    @Sync property boolean IsSalePending = false   -- 판매 확정 후 수령 대기 여부
-    @Sync property integer PendingSalePrice = 0    -- 수령 대기 금액(확정 판매가)
-    @Sync property string PendingSaleItemId = ""   -- 결과 창 무기 아이콘용(판매된 장비 id)
+    property boolean IsSalePending = false   -- 판매 확정 후 수령 대기 여부
+    property integer PendingSalePrice = 0    -- 수령 대기 금액(확정 판매가)
+    property string PendingSaleItemId = ""   -- 결과 창 무기 아이콘용(판매된 장비 id)
 
     -- ── 일차(A안): 별도 시간 시스템 없이 DebtStage로 표시. 일차 = DebtStage + 1 ──
-    --   (@Sync 불필요 — 클라가 DebtStage로 직접 계산. 서버 헤더 주석으로만 규약 고정.)
 
     -- ── 대장 기술(증강) 상태 (blacksmith_upgrade.md) ──
-    --   OwnedAugments: 서버 권위 {key = stage} 테이블(중첩이라 @Sync 불가 → 서버 보관).
-    --   AugmentsData: "key:stage,key:stage,..." 직렬화(@Sync, ShopSlotsData 패턴).
-    property any OwnedAugments = nil
-    @Sync property string AugmentsData = ""
+    --   OwnedAugments(서버 세션 필드): 서버 권위 {key = stage} 테이블(세션 테이블에 보관).
+    --   AugmentsData: "key:stage,key:stage,..." 직렬화 미러(ShopSlotsData 패턴).
+    property string AugmentsData = ""
     -- 획득 시 제시하는 3택 선택지(key CSV) + 대기 여부. 선택 전까지 유지.
-    @Sync property string AugmentChoicesData = ""
-    @Sync property boolean IsAugmentPending = false
+    property string AugmentChoicesData = ""
+    property boolean IsAugmentPending = false
 
     -- ── 재정 관리: 메소 대출 (finance_management.md) ──
-    @Sync property integer LoanUseCount = 0      -- 사용한 대출 횟수
-    @Sync property boolean CanLoan = false       -- 현재 대출 가능 여부(서버 판정, HUD/버튼 게이팅용)
-    -- 대출로 누적된 갚아야 할 빚. 대출 1회당 원금×repayMultiplier(=원금의 2배) 증가.
-    --   상환 시점(5/5)에 '상환 필요 메소 + 이 빚'을 전부 갚아야 다음 라운드로 진행한다. HUD '현재 빚' 별도 표시.
-    @Sync property integer Debt = 0
+    property integer LoanUseCount = 0      -- 사용한 대출 횟수
+    property boolean CanLoan = false       -- 현재 대출 가능 여부(서버 판정, HUD/버튼 게이팅용)
+    -- 대출로 누적된 갚아야 할 빚. 상환 시점(5/5)에 '상환 필요 메소 + 이 빚'을 전부 갚아야 다음 라운드 진행.
+    property integer Debt = 0
 
     -- ── 로비 상태(전이 API) ──
     --   현재 어떤 활동에 있는지 서버 권위 상태. UI/맵이 이 값을 읽어 전환. (lobby_hub.md)
     --   "lobby" / "cube" / "augment" / "finance"
-    @Sync property string CurrentActivity = "lobby"
+    property string CurrentActivity = "lobby"
+
+    -- ═══════════════ 서버 전용 상태 ═══════════════
+
+    -- userId → 세션 테이블. 서버 진실의 유일한 저장소(CreateSessionTable 참조). 서버에서만 접근.
+    property any Sessions = nil
 
     -- 게임오버 누적 기록용 DataStorage 핸들(OnBeginPlay에서 획득). Credit 절약 위해 게임오버 시에만 접근.
     property any recordStorage = nil
 
+    -- 클라 로컬: 초기 미러 동기화 핸드셰이크 요청 여부(RequestInitialSync 1회 가드).
+    property boolean initialSyncRequested = false
+
+    -- ═══════════════ 라이프사이클 ═══════════════
+
     @ExecSpace("ServerOnly")
     method void OnBeginPlay()
-        -- 게임오버 기록용 영구 저장 핸들 준비(월드 전역 누적 기록). Get*DataStorage는 ServerOnly.
+        -- 게임오버 기록용 영구 저장 핸들 준비 + 세션 저장소 초기화. Get*DataStorage는 ServerOnly.
         --   handle 획득 자체는 Credit 0(None 그룹). 실제 Set/Get는 게임오버 시점에만.
+        -- 세션 생성은 여기서 하지 않는다 — 유저 입장(HandleUserEnterEvent)/핸드셰이크에서 유저별로 생성.
         self.recordStorage = _DataStorageService:GetGlobalDataStorage("BlacksmithRecords")
-        self:ResetSession()  -- 세션 시작값 세팅 (flow §5). 재시작도 동일 경로 재사용.
-        log("[GameManager] session start. meso=" .. tostring(self.Meso)
-            .. ", nextRepayIn=" .. tostring(self.CubesUntilRepayment))
+        self.Sessions = {}
+        log("[GameManager] server ready (per-user sessions)")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnUpdate(number delta)
+        -- 초기 미러 동기화 핸드셰이크: 입장 완료(LocalPlayer 유효) 후 첫 프레임에 1회 서버에 push를 요청한다.
+        --   클라 발신이므로 응답(ApplySessionState) 시점에 수신 가능 상태가 보장된다(입장 순서 레이스 차단).
+        if self.initialSyncRequested then return end
+        if not isvalid(_UserService.LocalPlayer) then return end
+        self.initialSyncRequested = true
+        self:RequestInitialSync()
     end
 
     @ExecSpace("ServerOnly")
-    method void ResetSession()
-        -- 한 판의 전체 상태를 시작값으로 초기화한다. OnBeginPlay + RequestRestart 공용 (flow §5, 재시작=전체 리셋).
-        -- 설정은 BlacksmithConfig가 SSOT. DataStorage 누적 기록(recordStorage)은 여기서 건드리지 않는다.
-        local d = _BlacksmithConfig:GetData()
-        self.Meso = d.startMeso
-        self.CurrentItemId = ""
-        self.CubeUseCount = 0
-        self.DebtStage = 0
-        self.IsGameOver = false
-        self.GameOverReason = ""
-        self.IsVictory = false
-        self.IsRepaymentDue = false
-        self.PendingRepayment = 0
-        -- 판매 통계 리셋 (Phase 1)
-        self.TotalSellCount = 0
-        self.MaxSellPrice = 0
-        -- 증강 상태 리셋 (Phase 6·7)
-        self.OwnedAugments = {}
-        self.AugmentsData = ""
-        self.AugmentChoicesData = ""
-        self.IsAugmentPending = false
-        -- 대출 상태 리셋 (Phase 9)
-        self.LoanUseCount = 0
-        self.Debt = 0
-        self.CanLoan = false
-        -- 2단계 판매 대기 상태 리셋(재시작 안전)
-        self.IsSalePending = false
-        self.PendingSalePrice = 0
-        self.PendingSaleItemId = ""
-        -- 로비 상태 리셋 (Phase 5)
-        self.CurrentActivity = "lobby"
-        self:UpdateRepaymentCountdown()  -- 시작 시 '다음 상환까지 남은 큐브' 표시 (flow §5-4)
-        self:ResetPotentialState()
-        self:RollShop()  -- 시작 시 상점 슬롯 구성 (concept §6-1)
-        self:RollAugmentChoices()  -- 시작부터 대장 기술 3택 준비(구매형 상시 진입). blacksmith_upgrade.md §4
-        self:UpdateCanLoan()
+    @EventSender("Service", "UserService")
+    handler HandleUserEnterEvent(UserEnterEvent event)
+        -- 유저 입장 = 새 세션 시작(제품 결정: 재접속도 새 게임). 미러 push는 하지 않는다 —
+        --   클라 스크립트 로드 전이면 유실될 수 있어 초기 동기화는 RequestInitialSync로 일원화.
+        self:ResetSessionFor(event.UserId)
     end
 
-    method boolean IsSessionEnded()
-        -- 게임오버 또는 승리로 이번 판이 끝났는지(공용 가드). ExecSpace 없음 — 서버·클라 각자 로컬 판정.
-        return self.IsGameOver or self.IsVictory
+    @ExecSpace("ServerOnly")
+    @EventSender("Service", "UserService")
+    handler HandleUserLeaveEvent(UserLeaveEvent event)
+        -- 유저 퇴장 = 세션 폐기(재접속 = 새 게임, 서버 메모리 정리).
+        if self.Sessions ~= nil then
+            self.Sessions[event.UserId] = nil
+        end
+        log("[GameManager][u:" .. string.sub(event.UserId, 1, 8) .. "] session dropped (user left)")
+    end
+
+    -- ═══════════════ 세션 인프라 (per-user) ═══════════════
+
+    method string Tag(table s)
+        -- 서버 로그 접두: 어느 유저 세션의 로그인지 식별(멀티클라 검증의 핵심 관측 수단).
+        local uid = tostring(s.UserId or "?")
+        return "[GameManager][u:" .. string.sub(uid, 1, 8) .. "] "
+    end
+
+    @ExecSpace("ServerOnly")
+    method table CreateSessionTable()
+        -- 한 판의 전체 시작 상태 테이블을 생성한다. 설정은 BlacksmithConfig가 SSOT.
+        -- 미러 32개 스칼라 + 서버 전용 중첩 필드(ShopSlots/CurrentPotential/OwnedAugments) + UserId(생성자가 채움).
+        local d = _BlacksmithConfig:GetData()
+        return {
+            Meso = d.startMeso,
+            CurrentItemId = "",
+            CubeUseCount = 0,
+            DebtStage = 0,
+            IsGameOver = false,
+            GameOverReason = "",
+            IsVictory = false,
+            CubesUntilRepayment = 0,
+            IsRepaymentDue = false,
+            PendingRepayment = 0,
+            ShopSlotsData = "",
+            CurrentBasePrice = 0,
+            CurrentWeaponGrade = "",
+            HasPotential = false,
+            CurrentGrade = "",
+            CurrentResultType = "",
+            CurrentPrice = 0,
+            IsCurrentDestroyed = false,
+            CurrentPriceFormula = "",
+            CurrentPotentialData = "",
+            TotalSellCount = 0,
+            MaxSellPrice = 0,
+            IsSalePending = false,
+            PendingSalePrice = 0,
+            PendingSaleItemId = "",
+            AugmentsData = "",
+            AugmentChoicesData = "",
+            IsAugmentPending = false,
+            LoanUseCount = 0,
+            CanLoan = false,
+            Debt = 0,
+            CurrentActivity = "lobby",
+            -- 서버 전용 중첩(미러/PushState에 절대 포함 금지 — cross-space 전송 불가)
+            ShopSlots = nil,
+            CurrentPotential = nil,
+            OwnedAugments = {},
+        }
+    end
+
+    @ExecSpace("ServerOnly")
+    method table GetSession(string userId)
+        -- userId의 세션을 반환. 없으면 lazy 생성(입장 이벤트를 놓친 경로 대비 안전망).
+        if self.Sessions == nil then self.Sessions = {} end
+        if self.Sessions[userId] == nil then
+            self:ResetSessionFor(userId)
+        end
+        return self.Sessions[userId]
+    end
+
+    @ExecSpace("ServerOnly")
+    method void ResetSessionFor(string userId)
+        -- 해당 유저의 한 판 전체 상태를 시작값으로 초기화한다. 입장 + RequestRestart 공용 (flow §5).
+        -- DataStorage 누적 기록(recordStorage)은 여기서 건드리지 않는다.
+        if self.Sessions == nil then self.Sessions = {} end
+        local s = self:CreateSessionTable()
+        s.UserId = userId
+        self.Sessions[userId] = s
+        self:UpdateRepaymentCountdown(s)  -- 시작 시 '다음 상환까지 남은 큐브' 표시 (flow §5-4)
+        self:ResetPotentialState(s)
+        self:RollShop(s)                  -- 시작 시 상점 슬롯 구성 (concept §6-1)
+        self:RollAugmentChoices(s)        -- 시작부터 대장 기술 3택 준비(구매형 상시 진입). blacksmith_upgrade.md §4
+        self:UpdateCanLoan(s)
+        log(self:Tag(s) .. "session start. meso=" .. tostring(s.Meso)
+            .. ", nextRepayIn=" .. tostring(s.CubesUntilRepayment))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void PushState(string userId)
+        -- 세션의 미러 32개 스칼라를 flat table로 복사해 해당 유저 클라에만 전송한다(targeted Client RPC).
+        -- ⚠ 화이트리스트 명시 복사만 허용 — 중첩 테이블(ShopSlots 등)·UserId는 절대 포함 금지.
+        local s = self:GetSession(userId)
+        local state = {
+            Meso = s.Meso,
+            CurrentItemId = s.CurrentItemId,
+            CubeUseCount = s.CubeUseCount,
+            DebtStage = s.DebtStage,
+            IsGameOver = s.IsGameOver,
+            GameOverReason = s.GameOverReason,
+            IsVictory = s.IsVictory,
+            CubesUntilRepayment = s.CubesUntilRepayment,
+            IsRepaymentDue = s.IsRepaymentDue,
+            PendingRepayment = s.PendingRepayment,
+            ShopSlotsData = s.ShopSlotsData,
+            CurrentBasePrice = s.CurrentBasePrice,
+            CurrentWeaponGrade = s.CurrentWeaponGrade,
+            HasPotential = s.HasPotential,
+            CurrentGrade = s.CurrentGrade,
+            CurrentResultType = s.CurrentResultType,
+            CurrentPrice = s.CurrentPrice,
+            IsCurrentDestroyed = s.IsCurrentDestroyed,
+            CurrentPriceFormula = s.CurrentPriceFormula,
+            CurrentPotentialData = s.CurrentPotentialData,
+            TotalSellCount = s.TotalSellCount,
+            MaxSellPrice = s.MaxSellPrice,
+            IsSalePending = s.IsSalePending,
+            PendingSalePrice = s.PendingSalePrice,
+            PendingSaleItemId = s.PendingSaleItemId,
+            AugmentsData = s.AugmentsData,
+            AugmentChoicesData = s.AugmentChoicesData,
+            IsAugmentPending = s.IsAugmentPending,
+            LoanUseCount = s.LoanUseCount,
+            CanLoan = s.CanLoan,
+            Debt = s.Debt,
+            CurrentActivity = s.CurrentActivity,
+        }
+        self:ApplySessionState(state, userId)
+    end
+
+    @ExecSpace("Client")
+    method void ApplySessionState(table state)
+        -- 서버가 내 세션 상태를 밀어넣는 수신부(targeted — 이 유저에게만 도착). 미러 property 일괄 갱신.
+        self.Meso = state.Meso
+        self.CurrentItemId = state.CurrentItemId
+        self.CubeUseCount = state.CubeUseCount
+        self.DebtStage = state.DebtStage
+        self.IsGameOver = state.IsGameOver
+        self.GameOverReason = state.GameOverReason
+        self.IsVictory = state.IsVictory
+        self.CubesUntilRepayment = state.CubesUntilRepayment
+        self.IsRepaymentDue = state.IsRepaymentDue
+        self.PendingRepayment = state.PendingRepayment
+        self.ShopSlotsData = state.ShopSlotsData
+        self.CurrentBasePrice = state.CurrentBasePrice
+        self.CurrentWeaponGrade = state.CurrentWeaponGrade
+        self.HasPotential = state.HasPotential
+        self.CurrentGrade = state.CurrentGrade
+        self.CurrentResultType = state.CurrentResultType
+        self.CurrentPrice = state.CurrentPrice
+        self.IsCurrentDestroyed = state.IsCurrentDestroyed
+        self.CurrentPriceFormula = state.CurrentPriceFormula
+        self.CurrentPotentialData = state.CurrentPotentialData
+        self.TotalSellCount = state.TotalSellCount
+        self.MaxSellPrice = state.MaxSellPrice
+        self.IsSalePending = state.IsSalePending
+        self.PendingSalePrice = state.PendingSalePrice
+        self.PendingSaleItemId = state.PendingSaleItemId
+        self.AugmentsData = state.AugmentsData
+        self.AugmentChoicesData = state.AugmentChoicesData
+        self.IsAugmentPending = state.IsAugmentPending
+        self.LoanUseCount = state.LoanUseCount
+        self.CanLoan = state.CanLoan
+        self.Debt = state.Debt
+        self.CurrentActivity = state.CurrentActivity
     end
 
     @ExecSpace("Server")
-    method void RequestRestart()
-        -- 재시작: 게임오버/승리 상태에서만 허용. 현재 판 전체 리셋(누적 기록은 보존). (flow §게임오버 §7)
-        if not self:IsSessionEnded() then
-            log_warning("[GameManager] restart rejected: session not ended")
-            return
+    method void RequestInitialSync()
+        -- 접속 클라의 미러 초기화 핸드셰이크. GetSession이 lazy 생성을 겸한다(입장 이벤트 유실 대비).
+        local s = self:GetSession(senderUserId)
+        self:PushState(senderUserId)
+        log(self:Tag(s) .. "initial sync pushed. meso=" .. tostring(s.Meso))
+    end
+
+    -- ═══════════════ 클라 미러 판독 헬퍼 (ExecSpace 없음 — 클라가 로컬 호출) ═══════════════
+    -- ⚠ 서버 코드에서는 호출 금지 — 서버의 property 사본은 진실이 아니다. 서버는 ...Of(s) 변형을 쓴다.
+
+    method boolean IsSessionEnded()
+        -- 게임오버 또는 승리로 이번 판이 끝났는지(클라 미러 기준 공용 가드).
+        return self.IsGameOver or self.IsVictory
+    end
+
+    method any GetCurrentEquipment()
+        -- 현재 보유 아이템의 장비 정의 반환. 없으면 nil. (후속 단계/UI에서 사용)
+        if self.CurrentItemId == "" then return nil end
+        return _BlacksmithConfig:GetEquipment(self.CurrentItemId)
+    end
+
+    method integer GetCurrentDay()
+        -- 일차 = 완료 상환 단계 + 1 (A안). 로비/HUD '현재 날짜' 표시용 계산 규약. (lobby_hub.md §4)
+        return self.DebtStage + 1
+    end
+
+    method integer GetCurrentRepayment()
+        -- 현재 '상환 필요 메소' 단일 진실값(클라 미러 판독).
+        --   상환 미납(5/5)이면 실효 상환금 PendingRepayment, 아니면 다음 단계 원본 상환금 미리보기.
+        --   HUD 표시·대출 금액·재정 정보가 모두 이 값을 SSOT로 쓴다(드리프트 방지). 서버는 GetCurrentRepaymentOf.
+        if self.PendingRepayment > 0 then return self.PendingRepayment end
+        return _BlacksmithConfig:GetDebtAmount(self.DebtStage + 1)
+    end
+
+    method integer GetSyncedAugmentStage(string key)
+        -- 미러 AugmentsData("key:stage,...")에서 증강 단계 파싱. 미보유면 0.
+        --   클라 UI(구매가 표시 등)가 서버와 동일한 결과를 내기 위한 판독 경로. ShopSlotsData 파싱 패턴.
+        if self.AugmentsData == nil or self.AugmentsData == "" then return 0 end
+        for token in string.gmatch(self.AugmentsData, "([^,]+)") do
+            local k = string.match(token, "([^:]+):")
+            local st = string.match(token, ":([^:]+)")
+            if k == key then return tonumber(st) or 0 end
         end
-        self:ResetSession()
-        log("[GameManager] RESTART -> new session. meso=" .. tostring(self.Meso))
+        return 0
+    end
+
+    method integer GetEffectiveBuyCost(integer baseCost)
+        -- 증강 '가격 협상' 구매가 감소(%) 적용. 1000단위 반올림. 미보유면 원가. (클라 미러 판독)
+        --   미러 AugmentsData 기반이라 서버 차감액(GetEffectiveBuyCostOf)과 클라 표시값이 항상 일치한다.
+        local stage = self:GetSyncedAugmentStage("priceNego")
+        if stage <= 0 then return baseCost end
+        local pct = _BlacksmithConfig:GetAugmentStageValue("priceNego", stage)
+        if pct <= 0 then return baseCost end
+        local reduced = baseCost * (1 - pct / 100)
+        return math.floor(reduced / 1000 + 0.5) * 1000
+    end
+
+    -- ═══════════════ 서버 세션 판독 헬퍼 (...Of — 세션 테이블 기준) ═══════════════
+
+    @ExecSpace("ServerOnly")
+    method boolean IsSessionEndedOf(table s)
+        -- 게임오버 또는 승리로 이번 판이 끝났는지(서버 세션 기준 공용 가드).
+        return s.IsGameOver or s.IsVictory
     end
 
     @ExecSpace("ServerOnly")
-    method void RollShop()
-        -- 상점 슬롯을 무작위로 재구성한다(서버 권위). 각 슬롯 = 무작위 무기 종류 + 무작위 무기 등급.
-        -- 확률·등급은 BlacksmithConfig가 SSOT. 결과는 @Sync 문자열로 직렬화해 클라에 전달.
+    method integer GetCurrentDayOf(table s)
+        -- 일차 = 완료 상환 단계 + 1 (A안). 서버 로그용.
+        return s.DebtStage + 1
+    end
+
+    @ExecSpace("ServerOnly")
+    method integer GetCurrentRepaymentOf(table s)
+        -- 현재 '상환 필요 메소' 단일 진실값(서버 세션 기준). 클라 GetCurrentRepayment와 동일 규칙.
+        if s.PendingRepayment > 0 then return s.PendingRepayment end
+        return _BlacksmithConfig:GetDebtAmount(s.DebtStage + 1)
+    end
+
+    @ExecSpace("ServerOnly")
+    method integer GetAugmentStageOf(table s, string key)
+        -- 보유 증강의 현재 단계(0=미보유). 서버 권위 OwnedAugments 기준.
+        if s.OwnedAugments == nil then return 0 end
+        return s.OwnedAugments[key] or 0
+    end
+
+    @ExecSpace("ServerOnly")
+    method number GetAugmentStageValueOf(table s, string key)
+        -- 보유 중인 증강의 현재 단계 효과 수치. 미보유면 0. (효과 배선 공용 진입점)
+        local stage = self:GetAugmentStageOf(s, key)
+        if stage <= 0 then return 0 end
+        return _BlacksmithConfig:GetAugmentStageValue(key, stage)
+    end
+
+    @ExecSpace("ServerOnly")
+    method integer GetEffectiveBuyCostOf(table s, integer baseCost)
+        -- 증강 '가격 협상' 구매가 감소(%) 적용(서버 세션 기준). 클라 GetEffectiveBuyCost와 동일 공식.
+        local stage = self:GetAugmentStageOf(s, "priceNego")
+        if stage <= 0 then return baseCost end
+        local pct = _BlacksmithConfig:GetAugmentStageValue("priceNego", stage)
+        if pct <= 0 then return baseCost end
+        local reduced = baseCost * (1 - pct / 100)
+        return math.floor(reduced / 1000 + 0.5) * 1000
+    end
+
+    @ExecSpace("ServerOnly")
+    method integer ComputeRepaymentOf(table s, integer stage)
+        -- 실효 상환금 = 기본 상환금 × (1 + 위험거래 이자%). 1000단위 반올림. (Phase 8)
+        --   대출 빚(s.Debt)은 이 상환금과 별개로 상환 시점(RequestSettleDebt)에 합산한다.
+        local base = _BlacksmithConfig:GetDebtAmount(stage)
+        local riskPct = self:GetAugmentStageValueOf(s, "riskyDeal")
+        local amount = base * (1 + riskPct / 100)
+        return math.floor(amount / 1000 + 0.5) * 1000
+    end
+
+    -- ═══════════════ 서버 내부 로직 (세션 단위) ═══════════════
+
+    @ExecSpace("ServerOnly")
+    method void RollShop(table s)
+        -- 상점 슬롯을 무작위로 재구성한다(서버 권위, 해당 세션 한정). 각 슬롯 = 무작위 무기 종류 + 무작위 무기 등급.
+        -- 확률·등급은 BlacksmithConfig가 SSOT. 결과는 미러 문자열로 직렬화해 해당 클라에 전달.
         -- 한 상점 내에서 동일 (무기종류+등급) 조합은 중복되지 않는다(같은 종류라도 등급이 다르면 허용).
         local d = _BlacksmithConfig:GetData()
         local order = d.equipmentOrder
         -- 증강 '더 좋은 물품 들여오기': 보유 단계의 절대 확률표 사용(0=기본표). (blacksmith_upgrade.md §6)
-        local bgStage = self:GetAugmentStage("betterGoods")
+        local bgStage = self:GetAugmentStageOf(s, "betterGoods")
         local probTable = _BlacksmithConfig:GetShopGradeProbTable(bgStage)
         local slots = {}
         local parts = {}
@@ -180,8 +434,8 @@ script GameManager extends Logic
             slots[i] = { equipId = equipId, grade = grade, roll = rollValue }
             parts[i] = key
         end
-        self.ShopSlots = slots
-        self.ShopSlotsData = table.concat(parts, ",")
+        s.ShopSlots = slots
+        s.ShopSlotsData = table.concat(parts, ",")
         -- 상점 확률 로그(상시): 적용 중인 전체 확률표(누적 구간 포함) 1줄 + 슬롯별 무기·확률·실제 roll 값 1줄.
         --   roll은 0~100 랜덤 값 — 누적 구간(~60=커먼, ~90=레어 …)에 떨어진 위치가 곧 등급 판정 근거다.
         local tableParts = {}
@@ -190,191 +444,232 @@ script GameManager extends Logic
             acc = acc + probTable[gk]
             table.insert(tableParts, d.weaponGrades[gk].label .. tostring(probTable[gk]) .. "%(~" .. tostring(acc) .. ")")
         end
-        log("[RollShop] 등급 확률표(더좋은물품 " .. tostring(bgStage) .. "단계): " .. table.concat(tableParts, " "))
+        log(self:Tag(s) .. "[RollShop] 등급 확률표(더좋은물품 " .. tostring(bgStage) .. "단계): "
+            .. table.concat(tableParts, " "))
         local slotParts = {}
-        for i, s in ipairs(slots) do
-            local eqLabel = d.equipment[s.equipId].label
-            local grLabel = d.weaponGrades[s.grade].label
-            local rollStr = tostring(math.floor(s.roll * 10 + 0.5) / 10)
+        for i, slot in ipairs(slots) do
+            local eqLabel = d.equipment[slot.equipId].label
+            local grLabel = d.weaponGrades[slot.grade].label
+            local rollStr = tostring(math.floor(slot.roll * 10 + 0.5) / 10)
             table.insert(slotParts, "slot" .. tostring(i) .. "=" .. grLabel .. " " .. eqLabel
-                .. "(" .. tostring(probTable[s.grade]) .. "%, roll=" .. rollStr .. ")")
+                .. "(" .. tostring(probTable[slot.grade]) .. "%, roll=" .. rollStr .. ")")
         end
-        log("[RollShop] " .. table.concat(slotParts, " "))
+        log(self:Tag(s) .. "[RollShop] " .. table.concat(slotParts, " "))
     end
 
-    @ExecSpace("Server")
-    method void RequestRefreshShop()
-        -- '새로고침' 버튼: 메소 차감 없이 상점을 재추첨한다(개발/테스트 편의 + concept §6-1 선택 갱신).
-        if self:IsSessionEnded() then
-            log_warning("[GameManager] refresh rejected: session ended")
-            return
-        end
-        self:RollShop()
+    @ExecSpace("ServerOnly")
+    method void ClearItem(table s)
+        -- 현재 아이템 제거 + 잠재 상태 초기화(판매·파괴 후 공통). (flow §12-5·§14-8)
+        s.CurrentItemId = ""
+        s.CurrentBasePrice = 0
+        s.CurrentWeaponGrade = ""
+        self:ResetPotentialState(s)
     end
 
-    @ExecSpace("Server")
-    method void RequestBuyItem(integer slotIndex)
-        -- 아이템 구매: 슬롯 인덱스 검증 → 등급 가격 차감 → 현재 아이템 등록 → 상점 재추첨 (flow §6).
-        -- 클라 입력(slotIndex)은 신뢰하지 않고, 서버 자신의 ShopSlots에서 등급/가격을 읽어 검증한다(위조 차단).
-        if self:IsSessionEnded() then
-            log_warning("[GameManager] buy rejected: session ended")
-            return
-        end
-
-        -- 상환 미납(5/5) 상태면 정산이 먼저 — sync 갭 프레임의 상점 구매 방지
-        if self.IsRepaymentDue then
-            log_warning("[GameManager] buy rejected: repayment due (settle first)")
-            return
-        end
-
-        -- 현재 아이템이 있으면 새로 구매 불가 (flow §6 실패 처리)
-        if self.CurrentItemId ~= "" then
-            log_warning("[GameManager] buy rejected: already holding '" .. self.CurrentItemId .. "'")
-            return
-        end
-
-        -- 슬롯 인덱스 유효성 검증 (서버 권위 ShopSlots 기준)
-        if self.ShopSlots == nil or slotIndex < 1 or slotIndex > #self.ShopSlots then
-            log_warning("[GameManager] buy rejected: invalid slot " .. tostring(slotIndex))
-            return
-        end
-        local slot = self.ShopSlots[slotIndex]
-        local eq = _BlacksmithConfig:GetEquipment(slot.equipId)
-        local grade = _BlacksmithConfig:GetWeaponGrade(slot.grade)
-        if eq == nil or grade == nil then
-            log_warning("[GameManager] buy rejected: bad slot data " .. tostring(slot.equipId)
-                .. "/" .. tostring(slot.grade))
-            return
-        end
-
-        -- 증강 '가격 협상': 구매가 % 감소(미보유면 0%). (Phase 8)
-        local buyCost = self:GetEffectiveBuyCost(grade.buyCost)
-
-        -- 보유 메소 부족 시 구매 불가
-        if self.Meso < buyCost then
-            log_warning("[GameManager] buy rejected: not enough meso (" .. tostring(self.Meso)
-                .. " < " .. tostring(buyCost) .. ")")
-            return
-        end
-
-        self.Meso = self.Meso - buyCost
-        self.CurrentItemId = slot.equipId
-        self.CurrentBasePrice = grade.basePrice   -- 구매 등급의 기본 판매가(판매가 계산 base)
-        self.CurrentWeaponGrade = slot.grade
-        self:ResetPotentialState()  -- 새 아이템은 잠재 미사용 상태에서 시작
-        self:RollShop()             -- 구매한 무기는 작업대로 가져갔으므로 상점을 새로 채운다
-        self:UpdateCanLoan()
-        log("[GameManager] bought '" .. grade.label .. " " .. eq.label .. "' (-"
-            .. tostring(buyCost) .. " base=" .. tostring(grade.buyCost)
-            .. "), basePrice=" .. tostring(self.CurrentBasePrice)
-            .. ", meso=" .. tostring(self.Meso) .. ", item=" .. self.CurrentItemId)
-        self:CheckStuckGameOver()
+    @ExecSpace("ServerOnly")
+    method void ResetPotentialState(table s)
+        -- 잠재 결과/판매가 관련 상태를 초기값으로 되돌린다.
+        s.CurrentPotential = nil
+        s.HasPotential = false
+        s.CurrentGrade = ""
+        s.CurrentResultType = ""
+        s.CurrentPotentialData = ""
+        s.CurrentPrice = 0
+        s.CurrentPriceFormula = ""
+        s.IsCurrentDestroyed = false
     end
 
-    @ExecSpace("Server")
-    method void RequestUseCube(string cubeType)
-        -- 큐브 사용: 비용 차감 → 횟수 증가 → 잠재 판정 → 판매가 계산 → 결과 보관. (flow §7·§13)
-        -- 최초 사용과 '한 번 더 사용하기'는 둘 다 "현재 아이템에 큐브 사용"이라 이 메서드로 함께 처리한다.
-        -- cubeType: "weird"(이상한, 파괴 가능) / "master"(장인, 파괴 없음). 알 수 없으면 weird 폴백(클라 입력 불신).
-        if self:IsSessionEnded() then
-            log_warning("[GameManager] cube rejected: session ended")
-            return
+    @ExecSpace("ServerOnly")
+    method string SerializePotential(table s, any pr)
+        -- 잠재 결과(등급+옵션 3줄)를 미러 문자열로 직렬화한다(클라 스크래치 UI가 파싱해 표시).
+        --   포맷: "cubeCount;grade;line;line;line", line = "label|value|unit|optionType|isBonus|isDestroy|isValid|bonus".
+        --   맨 앞 cubeCount는 매 큐브 사용마다 값이 달라지게 해 클라가 동일 결과 재추첨도 변화로 감지하게 한다.
+        --   isValid는 주요 옵션의 장비 유효성(서버 판정). 비주요(잡옵/파괴)는 0.
+        --   bonus는 이 줄이 판매가에 더하는 옵션 보너스(서버 권위, GetOptionBonus). 클라는 이 값으로 실시간 판매가를 올린다.
+        local parts = { tostring(s.CubeUseCount), pr.grade }
+        for _, o in ipairs(pr.options) do
+            local isValid = 0
+            if o.optionType == "Main" and _BlacksmithConfig:IsValidMain(s.CurrentItemId, o.optionName) then
+                isValid = 1
+            end
+            local bonus = _PricingCalculator:GetOptionBonus(s.CurrentItemId, o)
+            local line = o.label .. "|" .. tostring(o.value) .. "|" .. o.unit .. "|" .. o.optionType
+                .. "|" .. (o.isBonusValue and "1" or "0")
+                .. "|" .. (o.isDestroy and "1" or "0")
+                .. "|" .. tostring(isValid)
+                .. "|" .. tostring(bonus)
+            table.insert(parts, line)
         end
-        -- 상환 미납 상태면 먼저 갚아야 다음 큐브 사용 가능 (flow §15 "상환 먼저 처리 후 진행")
-        if self.IsRepaymentDue then
-            log_warning("[GameManager] cube rejected: repayment due (settle first)")
-            return
-        end
-        -- 큐브 사용은 현재 아이템이 있을 때만 가능 (flow §7 기준)
-        if self.CurrentItemId == "" then
-            log_warning("[GameManager] cube rejected: no item")
-            return
-        end
-        -- 파괴된 아이템에는 다시 큐브를 사용할 수 없다. 먼저 확인(파괴 정리)이 필요. (flow §14)
-        if self.IsCurrentDestroyed then
-            log_warning("[GameManager] cube rejected: item destroyed (confirm first)")
-            return
-        end
-        -- 판매 확정(수령 대기) 상태면 큐브 재사용 불가 — 먼저 수령해야 한다. (2단계 판매)
-        if self.IsSalePending then
-            log_warning("[GameManager] cube rejected: sale pending (collect first)")
-            return
-        end
+        return table.concat(parts, ";")
+    end
 
-        local d = _BlacksmithConfig:GetData()
-        -- 큐브 종류 해석(클라 입력 불신 → 서버가 config에서 비용/파괴여부 확정). 알 수 없으면 weird 폴백.
-        local cube = _BlacksmithConfig:GetCube(cubeType)
-        if cube == nil then
-            cube = _BlacksmithConfig:GetCube("weird")
-        end
-        if self.Meso < cube.cost then
-            log_warning("[GameManager] cube rejected: not enough meso (" .. tostring(self.Meso)
-                .. " < " .. tostring(cube.cost) .. ")")
-            return
-        end
-
-        -- 비용 차감 + 큐브 사용 횟수 1 증가 (flow §7-4·5).
-        -- '한 번 더 사용하기' 시 기존 잠재/판매가는 새 결과로 덮어쓴다 (flow §13).
-        self.Meso = self.Meso - cube.cost
-        self.CubeUseCount = self.CubeUseCount + 1
-
-        -- 상환 주기(기본 5회) 경계 도달 시 상환 예정 상태로 전환 (concept §6-3, flow §15).
-        -- 실제 차감/게임오버는 RequestSettleDebt에서 처리(스크래치 결과 완료 후 호출).
-        if self.CubeUseCount % d.debtCycle == 0 then
-            local stage = self.CubeUseCount // d.debtCycle
-            self.IsRepaymentDue = true
-            -- 위험 거래(이자 증가)를 반영한 실효 상환금. 대출 빚(self.Debt)은 상환 시점에 별도 합산. (Phase 8·9)
-            self.PendingRepayment = self:ComputeRepayment(stage)
-            log("[GameManager] repayment DUE: stage=" .. tostring(stage)
-                .. ", amount=" .. tostring(self.PendingRepayment))
-        end
-        self:UpdateRepaymentCountdown()
-
-        -- 잠재능력 판정(서버 권위) → 판매가 계산(파괴면 Destroyed).
-        -- 기본 판매가는 구매한 무기 등급(CurrentBasePrice)을 baseOverride로 넘긴다(상점 등급 = 기본 판매가).
-        -- 파괴 허용 여부는 큐브 종류로 결정(장인의 큐브는 파괴 없음).
-        -- 증강 '대장장이의 눈': 현재 무기 유효 옵션 강제 확률(%)을 판정 컨텍스트로 넘긴다. (Phase 8)
-        local validForce = self:GetAugmentStageValueFor("smithEye")
-        local pr = _PotentialService:RollPotential(cube.allowDestroy, self.CurrentItemId, validForce)
-        pr.baseOverride = self.CurrentBasePrice
-        local calc = _PricingCalculator:Calculate(self.CurrentItemId, pr)
-        -- 증강 '위험 거래': 판매가 % 증가(파괴가 아닐 때만). (Phase 8)
-        -- 계산식 로그용: riskyDeal 적용 전 가격(prePrice)과 증가율(riskPct)을 캡처해 둔다.
-        local prePrice = calc.price
-        local riskPct = 0
-        if not calc.destroyed then
-            riskPct = self:GetAugmentStageValueFor("riskyDeal")
-            if riskPct > 0 then
-                calc.price = math.floor((calc.price * (1 + riskPct / 100)) / 1000 + 0.5) * 1000
+    @ExecSpace("ServerOnly")
+    method void CheckStuckGameOver(table s)
+        -- 스턱 게임오버 판정: 대출까지 소진했는데 다음 행동(무기/큐브 구매)이 완전히 막히면 게임오버.
+        --   (weapon_shop/finance 기획 — 대출 유도 팝업이 떴던 상황이 대출 소진 후 재발하면 게임오버)
+        -- ⚠ UpdateCanLoan 내부에서 호출 금지 — 세션 생성 시점 오발동 위험.
+        -- 호출 지점: weapon(미보유) = RequestShopStuckCheck(상점 화면 표시 시점) /
+        --            cube(보유)   = RequestUseCube·RequestBuyItem 말미.
+        if self:IsSessionEndedOf(s) then return end
+        if s.IsRepaymentDue then return end  -- 정산이 우선(정산 결과에서 별도 판정)
+        local loan = _BlacksmithConfig:GetLoanConfig()
+        if s.LoanUseCount < loan.maxUses then return end  -- 대출 여지가 남아 있으면 스턱 아님
+        local reason = ""
+        if s.CurrentItemId == "" then
+            -- 아이템 미보유: 현재 상점 3슬롯 전부 실효 구매가 초과 → 무기를 살 수 없음(새로고침은 디버그 전용).
+            local minBuy = -1
+            if s.ShopSlots ~= nil then
+                for _, slot in ipairs(s.ShopSlots) do
+                    local g = _BlacksmithConfig:GetWeaponGrade(slot.grade)
+                    if g ~= nil then
+                        local c = self:GetEffectiveBuyCostOf(s, g.buyCost)
+                        if minBuy < 0 or c < minBuy then minBuy = c end
+                    end
+                end
+            end
+            if minBuy < 0 or s.Meso < minBuy then
+                reason = "weapon"
+            end
+        elseif not s.IsCurrentDestroyed then
+            -- 아이템 보유: 큐브도 못 사고, 지금 팔아도 상점 최저가에 못 미치면 완전 스턱.
+            --   (판매로 살아날 수 있으면 게임오버 아님 — 판 뒤 미보유 판정("weapon")이 이어서 잡는다.)
+            local weird = _BlacksmithConfig:GetCube("weird")
+            local cubeCost = (weird ~= nil) and weird.cost or 0
+            if s.Meso < cubeCost then
+                -- 큐브 미사용(잠재 없음)이면 판매 불가 → 판매로 회생 불가(회생가 0). (기본가 판매 폐지)
+                local sellGain = s.HasPotential and s.CurrentPrice or 0
+                local minBuy = -1
+                if s.ShopSlots ~= nil then
+                    for _, slot in ipairs(s.ShopSlots) do
+                        local g = _BlacksmithConfig:GetWeaponGrade(slot.grade)
+                        if g ~= nil then
+                            local c = self:GetEffectiveBuyCostOf(s, g.buyCost)
+                            if minBuy < 0 or c < minBuy then minBuy = c end
+                        end
+                    end
+                end
+                if minBuy >= 0 and (s.Meso + sellGain) < minBuy then
+                    reason = "cube"
+                end
             end
         end
+        if reason == "" then return end
+        s.GameOverReason = reason
+        s.IsGameOver = true
+        self:UpdateCanLoan(s)
+        self:RecordGameOver(s)
+        log(self:Tag(s) .. "GAME OVER(" .. reason .. "): stuck with no loan left. meso="
+            .. tostring(s.Meso) .. ", item=" .. tostring(s.CurrentItemId))
+    end
 
-        -- 서버 권위 전체 결과 보관(옵션 3줄 포함) + 클라 전달용 직렬화.
-        self.CurrentPotential = pr
-        self.CurrentGrade = pr.grade
-        self.CurrentResultType = pr.resultType
-        self.CurrentPotentialData = self:SerializePotential(pr)
-        self.HasPotential = true
-
-        if calc.destroyed then
-            -- 파괴: 판매가 0, 파괴 상태로 전환. 실제 아이템 제거는 확인(RequestConfirmDestroy) 시. (flow §14)
-            self.IsCurrentDestroyed = true
-            self.CurrentPrice = 0
-            self.CurrentPriceFormula = ""
-            log("[GameManager] cube used -> DESTROYED. item=" .. self.CurrentItemId
-                .. ", cubeCount=" .. tostring(self.CubeUseCount) .. ", meso=" .. tostring(self.Meso))
-        else
-            self.IsCurrentDestroyed = false
-            self.CurrentPrice = calc.price
-            -- 판매가 계산식 문자열 조립(@Sync로 클라 스크래치 로그에 전달).
-            self.CurrentPriceFormula = self:BuildPriceFormula(calc, prePrice, riskPct)
-            log("[GameManager] cube used -> grade=" .. pr.grade .. ", type=" .. pr.resultType
-                .. ", price=" .. tostring(calc.price) .. ", cubeCount=" .. tostring(self.CubeUseCount)
-                .. ", meso=" .. tostring(self.Meso))
-            log("[GameManager] price formula: " .. self.CurrentPriceFormula)
+    @ExecSpace("ServerOnly")
+    method void UpdateRepaymentCountdown(table s)
+        -- 다음 상환까지 남은 큐브 횟수 갱신. 미납 상태면 0으로 표시. (concept §6-4, [6])
+        local d = _BlacksmithConfig:GetData()
+        if s.IsRepaymentDue then
+            s.CubesUntilRepayment = 0
+            return
         end
-        self:UpdateCanLoan()
-        self:CheckStuckGameOver()
+        s.CubesUntilRepayment = d.debtCycle - (s.CubeUseCount % d.debtCycle)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void SerializeAugments(table s)
+        -- OwnedAugments를 "key:stage,..." 미러 문자열로 직렬화(augmentOrder 순서 유지). ShopSlotsData 패턴.
+        local parts = {}
+        local order = _BlacksmithConfig:GetAugmentOrder()
+        for _, key in ipairs(order) do
+            local stage = self:GetAugmentStageOf(s, key)
+            if stage > 0 then
+                table.insert(parts, key .. ":" .. tostring(stage))
+            end
+        end
+        s.AugmentsData = table.concat(parts, ",")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void RollAugmentChoices(table s)
+        -- 3택 무작위 선택지 구성: 아직 최대 단계에 도달하지 않은 증강만 후보(3단계 소진 제외). (blacksmith_upgrade.md §5·§4)
+        local d = _BlacksmithConfig:GetData()
+        local pool = {}
+        for _, key in ipairs(d.augmentOrder) do
+            if self:GetAugmentStageOf(s, key) < d.augmentMaxStage then
+                table.insert(pool, key)
+            end
+        end
+        if #pool == 0 then
+            -- 모든 증강 소진 → 대기 없음.
+            s.AugmentChoicesData = ""
+            s.IsAugmentPending = false
+            log(self:Tag(s) .. "no augment choices (all maxed)")
+            return
+        end
+        -- Fisher-Yates 셔플 후 앞에서 choiceCount개 선택(중복 없음).
+        for i = #pool, 2, -1 do
+            local j = _UtilLogic:RandomIntegerRange(1, i)
+            pool[i], pool[j] = pool[j], pool[i]
+        end
+        local n = math.min(d.augmentChoiceCount, #pool)
+        local chosen = {}
+        for i = 1, n do chosen[i] = pool[i] end
+        s.AugmentChoicesData = table.concat(chosen, ",")
+        s.IsAugmentPending = true
+        log(self:Tag(s) .. "augment choices: " .. s.AugmentChoicesData)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void UpdateCanLoan(table s)
+        -- 대출 가능 여부 재계산: 게임오버 아님 + 사용 횟수 남음 + '다음 행동이 막힘'. (finance §2)
+        --   현재 화면 상황(아이템 보유 여부)에 따라 '막힘'을 판정해 HUD 대출 유도 팝업 조건과 정합화한다.
+        --     · 아이템 미보유(상점 화면): 상점 무기를 하나도 살 수 없음 = 막힘.
+        --     · 아이템 보유(스크래치 화면): 이상한 큐브를 살 수 없음 = 막힘(판매 탈출은 조건에서 제외, §2 문구).
+        --   (아이템이 없으면 큐브를 쓸 대상 자체가 없으므로 큐브 비용은 무기 구매 불가만으로 판정한다.)
+        local loan = _BlacksmithConfig:GetLoanConfig()
+        if self:IsSessionEndedOf(s) or s.LoanUseCount >= loan.maxUses then
+            s.CanLoan = false
+            return
+        end
+        local stuck
+        if s.CurrentItemId ~= "" then
+            local weird = _BlacksmithConfig:GetCube("weird")
+            local cubeCost = (weird ~= nil) and weird.cost or 0
+            stuck = s.Meso < cubeCost
+        else
+            local minBuy = -1
+            if s.ShopSlots ~= nil then
+                for _, slot in ipairs(s.ShopSlots) do
+                    local g = _BlacksmithConfig:GetWeaponGrade(slot.grade)
+                    if g ~= nil then
+                        local c = self:GetEffectiveBuyCostOf(s, g.buyCost)
+                        if minBuy < 0 or c < minBuy then minBuy = c end
+                    end
+                end
+            end
+            stuck = (minBuy < 0) or (s.Meso < minBuy)
+        end
+        s.CanLoan = stuck
+    end
+
+    @ExecSpace("ServerOnly")
+    method void RecordGameOver(table s)
+        -- 게임오버 시 최종 결과 5개 항목을 유저별 키로 영구 저장. (flow §게임오버 표시 정보)
+        -- ⚠ DataStorage는 Credit 과금 → 게임오버 1회성 이벤트에서만 호출(OnUpdate/타이머 금지). datastorage.md 준수.
+        if self.recordStorage == nil then
+            log_warning(self:Tag(s) .. "record skip: no storage handle")
+            return
+        end
+        local record = {
+            finalMeso = s.Meso,
+            totalCubes = s.CubeUseCount,
+            totalSells = s.TotalSellCount,
+            maxSellPrice = s.MaxSellPrice,
+            finalDebtStage = s.DebtStage,
+        }
+        -- 마지막 판 기록(유저별 키, 값 4KB 미만 → 1 Credit). 비동기 저장(프레임 보호).
+        self.recordStorage:SetAsync("lastRun:" .. tostring(s.UserId), _UtilLogic:TableToString(record), nil)
+        log(self:Tag(s) .. "game over recorded: meso=" .. tostring(record.finalMeso)
+            .. ", cubes=" .. tostring(record.totalCubes) .. ", sells=" .. tostring(record.totalSells)
+            .. ", maxPrice=" .. tostring(record.maxSellPrice) .. ", debtStage=" .. tostring(record.finalDebtStage))
     end
 
     method string BuildPriceFormula(any calc, number prePrice, number riskPct)
@@ -398,182 +693,377 @@ script GameManager extends Logic
         return f
     end
 
+    -- ═══════════════ Server RPC 엔트리포인트 (클라 호출) ═══════════════
+    -- 공통 패턴: 세션 조회(senderUserId — 서버 부여, 위조 불가) → 본문(Do*) → PushState 1회.
+    -- 본문에 early return이 있어도 말미 PushState가 항상 실행돼 미러 정체가 없다.
+
     @ExecSpace("Server")
-    method void RequestSellItem()
-        -- 판매 확정(1단계): 즉시 지급하지 않고 '수령 대기(IsSalePending)'로 전환한다. (cube_scratch_system §11, 2단계 판매)
-        --   실제 메소 지급·아이템 정리는 판매 결과 창의 '수령하기'(RequestCollectSale)에서 처리한다.
-        if self:IsSessionEnded() then
-            log_warning("[GameManager] sell rejected: session ended")
+    method void RequestRestart()
+        -- 재시작: 게임오버/승리 상태에서만 허용. 요청 유저의 세션만 전체 리셋(누적 기록은 보존). (flow §게임오버 §7)
+        local s = self:GetSession(senderUserId)
+        if not self:IsSessionEndedOf(s) then
+            log_warning(self:Tag(s) .. "restart rejected: session not ended")
+        else
+            self:ResetSessionFor(senderUserId)
+            log(self:Tag(self.Sessions[senderUserId]) .. "RESTART -> new session")
+        end
+        self:PushState(senderUserId)
+    end
+
+    @ExecSpace("Server")
+    method void RequestRefreshShop()
+        -- '새로고침' 버튼: 메소 차감 없이 상점을 재추첨한다(개발/테스트 편의 + concept §6-1 선택 갱신).
+        local s = self:GetSession(senderUserId)
+        if self:IsSessionEndedOf(s) then
+            log_warning(self:Tag(s) .. "refresh rejected: session ended")
+        else
+            self:RollShop(s)
+        end
+        self:PushState(senderUserId)
+    end
+
+    @ExecSpace("Server")
+    method void RequestBuyItem(integer slotIndex)
+        -- 아이템 구매 진입점. 검증·처리는 DoBuyItem(서버 권위), 말미 미러 push.
+        local s = self:GetSession(senderUserId)
+        self:DoBuyItem(s, slotIndex)
+        self:PushState(senderUserId)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void DoBuyItem(table s, integer slotIndex)
+        -- 아이템 구매: 슬롯 인덱스 검증 → 등급 가격 차감 → 현재 아이템 등록 → 상점 재추첨 (flow §6).
+        -- 클라 입력(slotIndex)은 신뢰하지 않고, 서버 자신의 ShopSlots에서 등급/가격을 읽어 검증한다(위조 차단).
+        if self:IsSessionEndedOf(s) then
+            log_warning(self:Tag(s) .. "buy rejected: session ended")
             return
         end
-        if self.CurrentItemId == "" then
-            log_warning("[GameManager] sell rejected: no item")
+
+        -- 상환 미납(5/5) 상태면 정산이 먼저 — sync 갭 프레임의 상점 구매 방지
+        if s.IsRepaymentDue then
+            log_warning(self:Tag(s) .. "buy rejected: repayment due (settle first)")
+            return
+        end
+
+        -- 현재 아이템이 있으면 새로 구매 불가 (flow §6 실패 처리)
+        if s.CurrentItemId ~= "" then
+            log_warning(self:Tag(s) .. "buy rejected: already holding '" .. s.CurrentItemId .. "'")
+            return
+        end
+
+        -- 슬롯 인덱스 유효성 검증 (서버 권위 ShopSlots 기준)
+        if s.ShopSlots == nil or slotIndex < 1 or slotIndex > #s.ShopSlots then
+            log_warning(self:Tag(s) .. "buy rejected: invalid slot " .. tostring(slotIndex))
+            return
+        end
+        local slot = s.ShopSlots[slotIndex]
+        local eq = _BlacksmithConfig:GetEquipment(slot.equipId)
+        local grade = _BlacksmithConfig:GetWeaponGrade(slot.grade)
+        if eq == nil or grade == nil then
+            log_warning(self:Tag(s) .. "buy rejected: bad slot data " .. tostring(slot.equipId)
+                .. "/" .. tostring(slot.grade))
+            return
+        end
+
+        -- 증강 '가격 협상': 구매가 % 감소(미보유면 0%). (Phase 8)
+        local buyCost = self:GetEffectiveBuyCostOf(s, grade.buyCost)
+
+        -- 보유 메소 부족 시 구매 불가
+        if s.Meso < buyCost then
+            log_warning(self:Tag(s) .. "buy rejected: not enough meso (" .. tostring(s.Meso)
+                .. " < " .. tostring(buyCost) .. ")")
+            return
+        end
+
+        s.Meso = s.Meso - buyCost
+        s.CurrentItemId = slot.equipId
+        s.CurrentBasePrice = grade.basePrice   -- 구매 등급의 기본 판매가(판매가 계산 base)
+        s.CurrentWeaponGrade = slot.grade
+        self:ResetPotentialState(s)  -- 새 아이템은 잠재 미사용 상태에서 시작
+        self:RollShop(s)             -- 구매한 무기는 작업대로 가져갔으므로 상점을 새로 채운다
+        self:UpdateCanLoan(s)
+        log(self:Tag(s) .. "bought '" .. grade.label .. " " .. eq.label .. "' (-"
+            .. tostring(buyCost) .. " base=" .. tostring(grade.buyCost)
+            .. "), basePrice=" .. tostring(s.CurrentBasePrice)
+            .. ", meso=" .. tostring(s.Meso) .. ", item=" .. s.CurrentItemId)
+        self:CheckStuckGameOver(s)
+    end
+
+    @ExecSpace("Server")
+    method void RequestUseCube(string cubeType)
+        -- 큐브 사용 진입점. 검증·판정은 DoUseCube(서버 권위), 말미 미러 push.
+        local s = self:GetSession(senderUserId)
+        self:DoUseCube(s, cubeType)
+        self:PushState(senderUserId)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void DoUseCube(table s, string cubeType)
+        -- 큐브 사용: 비용 차감 → 횟수 증가 → 잠재 판정 → 판매가 계산 → 결과 보관. (flow §7·§13)
+        -- 최초 사용과 '한 번 더 사용하기'는 둘 다 "현재 아이템에 큐브 사용"이라 이 메서드로 함께 처리한다.
+        -- cubeType: "weird"(이상한, 파괴 가능) / "master"(장인, 파괴 없음). 알 수 없으면 weird 폴백(클라 입력 불신).
+        if self:IsSessionEndedOf(s) then
+            log_warning(self:Tag(s) .. "cube rejected: session ended")
+            return
+        end
+        -- 상환 미납 상태면 먼저 갚아야 다음 큐브 사용 가능 (flow §15 "상환 먼저 처리 후 진행")
+        if s.IsRepaymentDue then
+            log_warning(self:Tag(s) .. "cube rejected: repayment due (settle first)")
+            return
+        end
+        -- 큐브 사용은 현재 아이템이 있을 때만 가능 (flow §7 기준)
+        if s.CurrentItemId == "" then
+            log_warning(self:Tag(s) .. "cube rejected: no item")
+            return
+        end
+        -- 파괴된 아이템에는 다시 큐브를 사용할 수 없다. 먼저 확인(파괴 정리)이 필요. (flow §14)
+        if s.IsCurrentDestroyed then
+            log_warning(self:Tag(s) .. "cube rejected: item destroyed (confirm first)")
+            return
+        end
+        -- 판매 확정(수령 대기) 상태면 큐브 재사용 불가 — 먼저 수령해야 한다. (2단계 판매)
+        if s.IsSalePending then
+            log_warning(self:Tag(s) .. "cube rejected: sale pending (collect first)")
+            return
+        end
+
+        local d = _BlacksmithConfig:GetData()
+        -- 큐브 종류 해석(클라 입력 불신 → 서버가 config에서 비용/파괴여부 확정). 알 수 없으면 weird 폴백.
+        local cube = _BlacksmithConfig:GetCube(cubeType)
+        if cube == nil then
+            cube = _BlacksmithConfig:GetCube("weird")
+        end
+        if s.Meso < cube.cost then
+            log_warning(self:Tag(s) .. "cube rejected: not enough meso (" .. tostring(s.Meso)
+                .. " < " .. tostring(cube.cost) .. ")")
+            return
+        end
+
+        -- 비용 차감 + 큐브 사용 횟수 1 증가 (flow §7-4·5).
+        -- '한 번 더 사용하기' 시 기존 잠재/판매가는 새 결과로 덮어쓴다 (flow §13).
+        s.Meso = s.Meso - cube.cost
+        s.CubeUseCount = s.CubeUseCount + 1
+
+        -- 상환 주기(기본 5회) 경계 도달 시 상환 예정 상태로 전환 (concept §6-3, flow §15).
+        -- 실제 차감/게임오버는 RequestSettleDebt에서 처리(스크래치 결과 완료 후 호출).
+        if s.CubeUseCount % d.debtCycle == 0 then
+            local stage = s.CubeUseCount // d.debtCycle
+            s.IsRepaymentDue = true
+            -- 위험 거래(이자 증가)를 반영한 실효 상환금. 대출 빚(s.Debt)은 상환 시점에 별도 합산. (Phase 8·9)
+            s.PendingRepayment = self:ComputeRepaymentOf(s, stage)
+            log(self:Tag(s) .. "repayment DUE: stage=" .. tostring(stage)
+                .. ", amount=" .. tostring(s.PendingRepayment))
+        end
+        self:UpdateRepaymentCountdown(s)
+
+        -- 잠재능력 판정(서버 권위) → 판매가 계산(파괴면 Destroyed).
+        -- 기본 판매가는 구매한 무기 등급(CurrentBasePrice)을 baseOverride로 넘긴다(상점 등급 = 기본 판매가).
+        -- 파괴 허용 여부는 큐브 종류로 결정(장인의 큐브는 파괴 없음).
+        -- 증강 '대장장이의 눈': 현재 무기 유효 옵션 강제 확률(%)을 판정 컨텍스트로 넘긴다. (Phase 8)
+        local validForce = self:GetAugmentStageValueOf(s, "smithEye")
+        local pr = _PotentialService:RollPotential(cube.allowDestroy, s.CurrentItemId, validForce)
+        pr.baseOverride = s.CurrentBasePrice
+        local calc = _PricingCalculator:Calculate(s.CurrentItemId, pr)
+        -- 증강 '위험 거래': 판매가 % 증가(파괴가 아닐 때만). (Phase 8)
+        -- 계산식 로그용: riskyDeal 적용 전 가격(prePrice)과 증가율(riskPct)을 캡처해 둔다.
+        local prePrice = calc.price
+        local riskPct = 0
+        if not calc.destroyed then
+            riskPct = self:GetAugmentStageValueOf(s, "riskyDeal")
+            if riskPct > 0 then
+                calc.price = math.floor((calc.price * (1 + riskPct / 100)) / 1000 + 0.5) * 1000
+            end
+        end
+
+        -- 서버 권위 전체 결과 보관(옵션 3줄 포함) + 클라 전달용 직렬화.
+        s.CurrentPotential = pr
+        s.CurrentGrade = pr.grade
+        s.CurrentResultType = pr.resultType
+        s.CurrentPotentialData = self:SerializePotential(s, pr)
+        s.HasPotential = true
+
+        if calc.destroyed then
+            -- 파괴: 판매가 0, 파괴 상태로 전환. 실제 아이템 제거는 확인(RequestConfirmDestroy) 시. (flow §14)
+            s.IsCurrentDestroyed = true
+            s.CurrentPrice = 0
+            s.CurrentPriceFormula = ""
+            log(self:Tag(s) .. "cube used -> DESTROYED. item=" .. s.CurrentItemId
+                .. ", cubeCount=" .. tostring(s.CubeUseCount) .. ", meso=" .. tostring(s.Meso))
+        else
+            s.IsCurrentDestroyed = false
+            s.CurrentPrice = calc.price
+            -- 판매가 계산식 문자열 조립(미러로 클라 스크래치 로그에 전달).
+            s.CurrentPriceFormula = self:BuildPriceFormula(calc, prePrice, riskPct)
+            log(self:Tag(s) .. "cube used -> grade=" .. pr.grade .. ", type=" .. pr.resultType
+                .. ", price=" .. tostring(calc.price) .. ", cubeCount=" .. tostring(s.CubeUseCount)
+                .. ", meso=" .. tostring(s.Meso))
+            log(self:Tag(s) .. "price formula: " .. s.CurrentPriceFormula)
+        end
+        self:UpdateCanLoan(s)
+        self:CheckStuckGameOver(s)
+    end
+
+    @ExecSpace("Server")
+    method void RequestSellItem()
+        -- 판매 확정(1단계) 진입점. (cube_scratch_system §11, 2단계 판매)
+        local s = self:GetSession(senderUserId)
+        self:DoSellItem(s)
+        self:PushState(senderUserId)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void DoSellItem(table s)
+        -- 판매 확정(1단계): 즉시 지급하지 않고 '수령 대기(IsSalePending)'로 전환한다.
+        --   실제 메소 지급·아이템 정리는 판매 결과 창의 '수령하기'(RequestCollectSale)에서 처리한다.
+        if self:IsSessionEndedOf(s) then
+            log_warning(self:Tag(s) .. "sell rejected: session ended")
+            return
+        end
+        if s.CurrentItemId == "" then
+            log_warning(self:Tag(s) .. "sell rejected: no item")
             return
         end
         -- 파괴된 아이템은 판매할 수 없다. (flow §12·§14)
-        if self.IsCurrentDestroyed then
-            log_warning("[GameManager] sell rejected: item destroyed")
+        if s.IsCurrentDestroyed then
+            log_warning(self:Tag(s) .. "sell rejected: item destroyed")
             return
         end
         -- 큐브 미사용 상태(잠재 없음)에서는 판매 불가(서버 권위 방어 — 클라 버튼 비활성화와 정합).
         --   큐브를 한 번이라도 써야 판매 가능. 기본가 판매(데드락 탈출)는 폐지 → 스턱은 게임오버로 처리.
-        if not self.HasPotential then
-            log_warning("[GameManager] sell rejected: no cube used (potential required)")
+        if not s.HasPotential then
+            log_warning(self:Tag(s) .. "sell rejected: no cube used (potential required)")
             return
         end
         -- 이미 수령 대기 중이면 중복 요청 무시.
-        if self.IsSalePending then
-            log_warning("[GameManager] sell rejected: already pending collect")
+        if s.IsSalePending then
+            log_warning(self:Tag(s) .. "sell rejected: already pending collect")
             return
         end
         -- 수령 대기 상태로 전환(아이템/잠재 상태는 유지 → 결과 창 표시 + 수령 흐름). (2단계 판매)
-        self.IsSalePending = true
-        self.PendingSalePrice = self.CurrentPrice
-        self.PendingSaleItemId = self.CurrentItemId
-        log("[GameManager] sale pending '" .. self.CurrentItemId .. "' price="
-            .. tostring(self.PendingSalePrice) .. " (awaiting collect)")
+        s.IsSalePending = true
+        s.PendingSalePrice = s.CurrentPrice
+        s.PendingSaleItemId = s.CurrentItemId
+        log(self:Tag(s) .. "sale pending '" .. s.CurrentItemId .. "' price="
+            .. tostring(s.PendingSalePrice) .. " (awaiting collect)")
     end
 
     @ExecSpace("Server")
     method void RequestCollectSale()
-        -- 판매 수령(2단계): 수령 대기 금액을 지급하고 아이템/잠재 상태를 정리한다. (cube_scratch_system §11)
-        if self:IsSessionEnded() then
-            log_warning("[GameManager] collect rejected: session ended")
+        -- 판매 수령(2단계) 진입점. (cube_scratch_system §11)
+        local s = self:GetSession(senderUserId)
+        self:DoCollectSale(s)
+        self:PushState(senderUserId)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void DoCollectSale(table s)
+        -- 판매 수령(2단계): 수령 대기 금액을 지급하고 아이템/잠재 상태를 정리한다.
+        if self:IsSessionEndedOf(s) then
+            log_warning(self:Tag(s) .. "collect rejected: session ended")
             return
         end
-        if not self.IsSalePending then
-            log_warning("[GameManager] collect rejected: no pending sale")
+        if not s.IsSalePending then
+            log_warning(self:Tag(s) .. "collect rejected: no pending sale")
             return
         end
-        local gain = self.PendingSalePrice
-        local soldId = self.PendingSaleItemId
-        self.Meso = self.Meso + gain
+        local gain = s.PendingSalePrice
+        local soldId = s.PendingSaleItemId
+        s.Meso = s.Meso + gain
         -- 판매 통계 갱신(게임오버 기록용, Phase 1).
-        self.TotalSellCount = self.TotalSellCount + 1
-        if gain > self.MaxSellPrice then self.MaxSellPrice = gain end
+        s.TotalSellCount = s.TotalSellCount + 1
+        if gain > s.MaxSellPrice then s.MaxSellPrice = gain end
         -- 수령 대기 상태 해제 후 아이템 정리(순서 무관하나 pending 먼저 내려야 클라 에지 감지가 깔끔).
-        self.IsSalePending = false
-        self.PendingSalePrice = 0
-        self.PendingSaleItemId = ""
-        self:ClearItem()
-        self:UpdateCanLoan()
-        log("[GameManager] collected sale '" .. soldId .. "' (+" .. tostring(gain)
-            .. "), meso=" .. tostring(self.Meso)
-            .. ", totalSells=" .. tostring(self.TotalSellCount) .. ", maxPrice=" .. tostring(self.MaxSellPrice))
+        s.IsSalePending = false
+        s.PendingSalePrice = 0
+        s.PendingSaleItemId = ""
+        self:ClearItem(s)
+        self:UpdateCanLoan(s)
+        log(self:Tag(s) .. "collected sale '" .. soldId .. "' (+" .. tostring(gain)
+            .. "), meso=" .. tostring(s.Meso)
+            .. ", totalSells=" .. tostring(s.TotalSellCount) .. ", maxPrice=" .. tostring(s.MaxSellPrice))
         -- 스턱(weapon) 판정은 상점 화면 표시 시점(RequestShopStuckCheck)으로 연기.
     end
 
     @ExecSpace("Server")
     method void RequestConfirmDestroy()
-        -- 파괴 확인: 파괴된 아이템을 제거하고 아이템 선택 상태로 되돌린다. (flow §14-7·8)
-        if self.CurrentItemId == "" then
-            log_warning("[GameManager] confirm rejected: no item")
+        -- 파괴 확인 진입점. (flow §14-7·8)
+        local s = self:GetSession(senderUserId)
+        self:DoConfirmDestroy(s)
+        self:PushState(senderUserId)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void DoConfirmDestroy(table s)
+        -- 파괴 확인: 파괴된 아이템을 제거하고 아이템 선택 상태로 되돌린다.
+        if s.CurrentItemId == "" then
+            log_warning(self:Tag(s) .. "confirm rejected: no item")
             return
         end
-        if not self.IsCurrentDestroyed then
-            log_warning("[GameManager] confirm rejected: item not destroyed")
+        if not s.IsCurrentDestroyed then
+            log_warning(self:Tag(s) .. "confirm rejected: item not destroyed")
             return
         end
-        local lostId = self.CurrentItemId
-        self:ClearItem()
-        self:UpdateCanLoan()
-        log("[GameManager] destroyed item '" .. lostId .. "' removed")
+        local lostId = s.CurrentItemId
+        self:ClearItem(s)
+        self:UpdateCanLoan(s)
+        log(self:Tag(s) .. "destroyed item '" .. lostId .. "' removed")
         -- 스턱(weapon) 판정은 상점 화면 표시 시점(RequestShopStuckCheck)으로 연기.
-    end
-
-    @ExecSpace("ServerOnly")
-    method void ClearItem()
-        -- 현재 아이템 제거 + 잠재 상태 초기화(판매·파괴 후 공통). (flow §12-5·§14-8)
-        self.CurrentItemId = ""
-        self.CurrentBasePrice = 0
-        self.CurrentWeaponGrade = ""
-        self:ResetPotentialState()
-    end
-
-    @ExecSpace("ServerOnly")
-    method void ResetPotentialState()
-        -- 잠재 결과/판매가 관련 상태를 초기값으로 되돌린다.
-        self.CurrentPotential = nil
-        self.HasPotential = false
-        self.CurrentGrade = ""
-        self.CurrentResultType = ""
-        self.CurrentPotentialData = ""
-        self.CurrentPrice = 0
-        self.CurrentPriceFormula = ""
-        self.IsCurrentDestroyed = false
-    end
-
-    @ExecSpace("ServerOnly")
-    method string SerializePotential(any pr)
-        -- 잠재 결과(등급+옵션 3줄)를 @Sync 문자열로 직렬화한다(클라 스크래치 UI가 파싱해 표시).
-        --   포맷: "cubeCount;grade;line;line;line", line = "label|value|unit|optionType|isBonus|isDestroy|isValid|bonus".
-        --   맨 앞 cubeCount는 매 큐브 사용마다 값이 달라지게 해 클라가 동일 결과 재추첨도 변화로 감지하게 한다.
-        --   isValid는 주요 옵션의 장비 유효성(서버 판정). 비주요(잡옵/파괴)는 0.
-        --   bonus는 이 줄이 판매가에 더하는 옵션 보너스(서버 권위, GetOptionBonus). 클라는 이 값으로 실시간 판매가를 올린다.
-        local parts = { tostring(self.CubeUseCount), pr.grade }
-        for _, o in ipairs(pr.options) do
-            local isValid = 0
-            if o.optionType == "Main" and _BlacksmithConfig:IsValidMain(self.CurrentItemId, o.optionName) then
-                isValid = 1
-            end
-            local bonus = _PricingCalculator:GetOptionBonus(self.CurrentItemId, o)
-            local line = o.label .. "|" .. tostring(o.value) .. "|" .. o.unit .. "|" .. o.optionType
-                .. "|" .. (o.isBonusValue and "1" or "0")
-                .. "|" .. (o.isDestroy and "1" or "0")
-                .. "|" .. tostring(isValid)
-                .. "|" .. tostring(bonus)
-            table.insert(parts, line)
-        end
-        return table.concat(parts, ";")
     end
 
     @ExecSpace("Server")
     method void RequestSettleDebt()
-        -- 빚 상환: 상환 시점 도달 시 메소 차감, 부족하면 게임오버. (flow §15·§16)
-        -- UI는 다음주 정산 팝업(NextWeekManager)이 로비 복귀 시 호출한다 (flow §15).
-        if self:IsSessionEnded() then return end
-        if not self.IsRepaymentDue then
-            log_warning("[GameManager] settle rejected: no repayment due")
+        -- 빚 상환 진입점. (flow §15·§16 — UI는 다음주 정산 팝업(NextWeekManager)이 로비 복귀 시 호출)
+        local s = self:GetSession(senderUserId)
+        self:DoSettleDebt(s)
+        self:PushState(senderUserId)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void DoSettleDebt(table s)
+        -- 빚 상환: 상환 시점 도달 시 메소 차감, 부족하면 게임오버.
+        if self:IsSessionEndedOf(s) then return end
+        if not s.IsRepaymentDue then
+            log_warning(self:Tag(s) .. "settle rejected: no repayment due")
             return
         end
 
         -- 상환 필요 메소 + 대출로 누적된 빚을 전부 갚아야 다음 주로 진행한다(finance §, 유저 확정).
-        local amount = self.PendingRepayment + self.Debt
-        if self.Meso >= amount then
-            self.Meso = self.Meso - amount
-            self.Debt = 0
-            self.DebtStage = self.DebtStage + 1
-            self.IsRepaymentDue = false
-            self.PendingRepayment = 0
-            self:UpdateRepaymentCountdown()
-            self:UpdateCanLoan()
-            log("[GameManager] debt settled: stage=" .. tostring(self.DebtStage)
-                .. ", -" .. tostring(amount) .. ", meso=" .. tostring(self.Meso)
-                .. ", nextRepayIn=" .. tostring(self.CubesUntilRepayment))
+        local amount = s.PendingRepayment + s.Debt
+        if s.Meso >= amount then
+            s.Meso = s.Meso - amount
+            s.Debt = 0
+            s.DebtStage = s.DebtStage + 1
+            s.IsRepaymentDue = false
+            s.PendingRepayment = 0
+            self:UpdateRepaymentCountdown(s)
+            self:UpdateCanLoan(s)
+            log(self:Tag(s) .. "debt settled: stage=" .. tostring(s.DebtStage)
+                .. ", -" .. tostring(amount) .. ", meso=" .. tostring(s.Meso)
+                .. ", nextRepayIn=" .. tostring(s.CubesUntilRepayment))
             -- 승리 판정: winStage회(5주) 상환 성공 시 승리 (finance_management.md 승리 조건).
             local winStage = _BlacksmithConfig:GetData().winStage
-            if self.DebtStage >= winStage then
-                self.IsVictory = true
-                self:UpdateCanLoan()
-                log("[GameManager] VICTORY: " .. tostring(self.DebtStage) .. "주 상환 완료. meso="
-                    .. tostring(self.Meso) .. ", cubes=" .. tostring(self.CubeUseCount))
+            if s.DebtStage >= winStage then
+                s.IsVictory = true
+                self:UpdateCanLoan(s)
+                log(self:Tag(s) .. "VICTORY: " .. tostring(s.DebtStage) .. "주 상환 완료. meso="
+                    .. tostring(s.Meso) .. ", cubes=" .. tostring(s.CubeUseCount))
                 return
             end
             -- (증강은 상환 보상이 아니라 골드 구매형 — RollAugmentChoices는 여기서 호출하지 않는다.
-            --  구매형 전환: 3택은 ResetSession에서 1회 롤 + 구매 성공(RequestSelectAugment) 시 재추첨. blacksmith_upgrade.md §3·§4)
-            log("[GameManager] NEXT WEEK: day=" .. tostring(self:GetCurrentDay())
-                .. "주차, nextRepay=" .. tostring(self:GetCurrentRepayment()))
+            --  구매형 전환: 3택은 세션 시작 시 1회 롤 + 구매 성공(RequestSelectAugment) 시 재추첨. blacksmith_upgrade.md §3·§4)
+            log(self:Tag(s) .. "NEXT WEEK: day=" .. tostring(self:GetCurrentDayOf(s))
+                .. "주차, nextRepay=" .. tostring(self:GetCurrentRepaymentOf(s)))
             -- ⚠ 여기서 스턱(weapon) 판정을 하지 않는다 — 판정은 플레이어가 무기 상점 화면을 열어
             --   슬롯이 표시된 시점(RequestShopStuckCheck)에만 수행한다(유저 확정: 로비에서 즉사 금지).
         else
             -- 상환 실패 → 게임 오버 (flow §16). 원인: 상환액 자체가 부족 vs 빚까지는 부족.
             --   메소는 차감하지 않는다(게임오버 기록의 finalMeso 보존, 차감 연출은 클라 표시 전용).
-            self.GameOverReason = (self.Meso < self.PendingRepayment) and "repayment" or "debt"
-            self.IsGameOver = true
-            self:UpdateCanLoan()
-            self:RecordGameOver()
-            log("[GameManager] GAME OVER(" .. self.GameOverReason .. "): cannot repay "
-                .. tostring(amount) .. " (meso=" .. tostring(self.Meso) .. ")")
+            s.GameOverReason = (s.Meso < s.PendingRepayment) and "repayment" or "debt"
+            s.IsGameOver = true
+            self:UpdateCanLoan(s)
+            self:RecordGameOver(s)
+            log(self:Tag(s) .. "GAME OVER(" .. s.GameOverReason .. "): cannot repay "
+                .. tostring(amount) .. " (meso=" .. tostring(s.Meso) .. ")")
         end
     end
 
@@ -582,304 +1072,103 @@ script GameManager extends Logic
         -- 무기 상점 화면에 슬롯이 표시된 시점에 클라(WeaponShopManager)가 호출하는 판정 트리거.
         -- 클라 입력이 없고(타이밍 신호만) 판정은 전부 서버 권위(CheckStuckGameOver)라 위조 위험 없음.
         -- weapon 스턱 판정은 이 경로로만 발동한다 — 로비/정산 직후에는 판정하지 않음(유저 확정).
-        if self:IsSessionEnded() then return end
-        if self.IsRepaymentDue then return end     -- 정산이 우선
-        if self.CurrentItemId ~= "" then return end -- 상점 컨텍스트(아이템 미보유)에서만
-        self:CheckStuckGameOver()
-    end
-
-    @ExecSpace("ServerOnly")
-    method void CheckStuckGameOver()
-        -- 스턱 게임오버 판정: 대출까지 소진했는데 다음 행동(무기/큐브 구매)이 완전히 막히면 게임오버.
-        --   (weapon_shop/finance 기획 — 대출 유도 팝업이 떴던 상황이 대출 소진 후 재발하면 게임오버)
-        -- ⚠ UpdateCanLoan 내부에서 호출 금지 — ResetSession 경유 시작 시점 오발동 위험.
-        -- 호출 지점: weapon(미보유) = RequestShopStuckCheck(상점 화면 표시 시점) /
-        --            cube(보유)   = RequestUseCube·RequestBuyItem 말미.
-        if self:IsSessionEnded() then return end
-        if self.IsRepaymentDue then return end  -- 정산이 우선(정산 결과에서 별도 판정)
-        local loan = _BlacksmithConfig:GetLoanConfig()
-        if self.LoanUseCount < loan.maxUses then return end  -- 대출 여지가 남아 있으면 스턱 아님
-        local reason = ""
-        if self.CurrentItemId == "" then
-            -- 아이템 미보유: 현재 상점 3슬롯 전부 실효 구매가 초과 → 무기를 살 수 없음(새로고침은 디버그 전용).
-            local minBuy = -1
-            if self.ShopSlots ~= nil then
-                for _, slot in ipairs(self.ShopSlots) do
-                    local g = _BlacksmithConfig:GetWeaponGrade(slot.grade)
-                    if g ~= nil then
-                        local c = self:GetEffectiveBuyCost(g.buyCost)
-                        if minBuy < 0 or c < minBuy then minBuy = c end
-                    end
-                end
-            end
-            if minBuy < 0 or self.Meso < minBuy then
-                reason = "weapon"
-            end
-        elseif not self.IsCurrentDestroyed then
-            -- 아이템 보유: 큐브도 못 사고, 지금 팔아도 상점 최저가에 못 미치면 완전 스턱.
-            --   (판매로 살아날 수 있으면 게임오버 아님 — 판 뒤 미보유 판정("weapon")이 이어서 잡는다.)
-            local weird = _BlacksmithConfig:GetCube("weird")
-            local cubeCost = (weird ~= nil) and weird.cost or 0
-            if self.Meso < cubeCost then
-                -- 큐브 미사용(잠재 없음)이면 판매 불가 → 판매로 회생 불가(회생가 0). (기본가 판매 폐지)
-                local sellGain = self.HasPotential and self.CurrentPrice or 0
-                local minBuy = -1
-                if self.ShopSlots ~= nil then
-                    for _, slot in ipairs(self.ShopSlots) do
-                        local g = _BlacksmithConfig:GetWeaponGrade(slot.grade)
-                        if g ~= nil then
-                            local c = self:GetEffectiveBuyCost(g.buyCost)
-                            if minBuy < 0 or c < minBuy then minBuy = c end
-                        end
-                    end
-                end
-                if minBuy >= 0 and (self.Meso + sellGain) < minBuy then
-                    reason = "cube"
-                end
-            end
+        local s = self:GetSession(senderUserId)
+        if not self:IsSessionEndedOf(s) and not s.IsRepaymentDue and s.CurrentItemId == "" then
+            self:CheckStuckGameOver(s)
         end
-        if reason == "" then return end
-        self.GameOverReason = reason
-        self.IsGameOver = true
-        self:UpdateCanLoan()
-        self:RecordGameOver()
-        log("[GameManager] GAME OVER(" .. reason .. "): stuck with no loan left. meso="
-            .. tostring(self.Meso) .. ", item=" .. tostring(self.CurrentItemId))
-    end
-
-    @ExecSpace("ServerOnly")
-    method void UpdateRepaymentCountdown()
-        -- 다음 상환까지 남은 큐브 횟수 갱신. 미납 상태면 0으로 표시. (concept §6-4, [6])
-        local d = _BlacksmithConfig:GetData()
-        if self.IsRepaymentDue then
-            self.CubesUntilRepayment = 0
-            return
-        end
-        self.CubesUntilRepayment = d.debtCycle - (self.CubeUseCount % d.debtCycle)
-    end
-
-    method any GetCurrentEquipment()
-        -- 현재 보유 아이템의 장비 정의 반환. 없으면 nil. (후속 단계/UI에서 사용)
-        if self.CurrentItemId == "" then return nil end
-        return _BlacksmithConfig:GetEquipment(self.CurrentItemId)
-    end
-
-    method integer GetCurrentDay()
-        -- 일차 = 완료 상환 단계 + 1 (A안). 로비/HUD '현재 날짜' 표시용 계산 규약. (lobby_hub.md §4)
-        return self.DebtStage + 1
-    end
-
-    method integer GetCurrentRepayment()
-        -- 현재 '상환 필요 메소' 단일 진실값(서버·클라 공용, ExecSpace 없음).
-        --   상환 미납(5/5)이면 실효 상환금 PendingRepayment, 아니면 다음 단계 원본 상환금 미리보기.
-        --   HUD 표시·대출 금액·재정 정보가 모두 이 값을 SSOT로 쓴다(드리프트 방지).
-        if self.PendingRepayment > 0 then return self.PendingRepayment end
-        return _BlacksmithConfig:GetDebtAmount(self.DebtStage + 1)
-    end
-
-    -- ═══════════════ 대장 기술(증강) — 상태/선택 (Phase 6·7) ═══════════════
-
-    method integer GetAugmentStage(string key)
-        -- 보유 증강의 현재 단계(0=미보유).
-        if self.OwnedAugments == nil then return 0 end
-        return self.OwnedAugments[key] or 0
-    end
-
-    method number GetAugmentStageValueFor(string key)
-        -- 보유 중인 증강의 현재 단계 효과 수치. 미보유면 0. (효과 배선 공용 진입점)
-        local stage = self:GetAugmentStage(key)
-        if stage <= 0 then return 0 end
-        return _BlacksmithConfig:GetAugmentStageValue(key, stage)
-    end
-
-    method integer GetSyncedAugmentStage(string key)
-        -- @Sync AugmentsData("key:stage,...")에서 증강 단계 파싱. 미보유면 0.
-        -- ⚠ OwnedAugments(서버전용 중첩테이블, @Sync 불가)를 읽는 GetAugmentStage와 달리, @Sync 문자열만
-        --    파싱하므로 클라이언트 UI에서도 서버와 동일한 결과를 낸다(구매가 표시 정합용). ShopSlotsData 파싱 패턴.
-        if self.AugmentsData == nil or self.AugmentsData == "" then return 0 end
-        for token in string.gmatch(self.AugmentsData, "([^,]+)") do
-            local k = string.match(token, "([^:]+):")
-            local s = string.match(token, ":([^:]+)")
-            if k == key then return tonumber(s) or 0 end
-        end
-        return 0
-    end
-
-    @ExecSpace("ServerOnly")
-    method void SerializeAugments()
-        -- OwnedAugments를 "key:stage,..." @Sync 문자열로 직렬화(augmentOrder 순서 유지). ShopSlotsData 패턴.
-        local parts = {}
-        local order = _BlacksmithConfig:GetAugmentOrder()
-        for _, key in ipairs(order) do
-            local stage = self:GetAugmentStage(key)
-            if stage > 0 then
-                table.insert(parts, key .. ":" .. tostring(stage))
-            end
-        end
-        self.AugmentsData = table.concat(parts, ",")
-    end
-
-    @ExecSpace("ServerOnly")
-    method void RollAugmentChoices()
-        -- 3택 무작위 선택지 구성: 아직 최대 단계에 도달하지 않은 증강만 후보(3단계 소진 제외). (blacksmith_upgrade.md §5·§4)
-        local d = _BlacksmithConfig:GetData()
-        local pool = {}
-        for _, key in ipairs(d.augmentOrder) do
-            if self:GetAugmentStage(key) < d.augmentMaxStage then
-                table.insert(pool, key)
-            end
-        end
-        if #pool == 0 then
-            -- 모든 증강 소진 → 대기 없음.
-            self.AugmentChoicesData = ""
-            self.IsAugmentPending = false
-            log("[GameManager] no augment choices (all maxed)")
-            return
-        end
-        -- Fisher-Yates 셔플 후 앞에서 choiceCount개 선택(중복 없음).
-        for i = #pool, 2, -1 do
-            local j = _UtilLogic:RandomIntegerRange(1, i)
-            pool[i], pool[j] = pool[j], pool[i]
-        end
-        local n = math.min(d.augmentChoiceCount, #pool)
-        local chosen = {}
-        for i = 1, n do chosen[i] = pool[i] end
-        self.AugmentChoicesData = table.concat(chosen, ",")
-        self.IsAugmentPending = true
-        log("[GameManager] augment choices: " .. self.AugmentChoicesData)
+        self:PushState(senderUserId)
     end
 
     @ExecSpace("Server")
     method void RequestSelectAugment(string augmentKey)
-        -- 증강 구매: 제시된 3택 중 하나를 골드로 구매(도달 단계 기준 비용 차감). 중복이면 단계 상승. (blacksmith_upgrade.md §3·§4)
+        -- 증강 구매 진입점. (blacksmith_upgrade.md §3·§4)
+        local s = self:GetSession(senderUserId)
+        self:DoSelectAugment(s, augmentKey)
+        self:PushState(senderUserId)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void DoSelectAugment(table s, string augmentKey)
+        -- 증강 구매: 제시된 3택 중 하나를 골드로 구매(도달 단계 기준 비용 차감). 중복이면 단계 상승.
         --   클라 입력 불신: 선택지 포함 여부·비용·단계 상한 모두 서버 권위 검증. 구매 성공 시 창을 재추첨한다(§4-4 새로고침).
-        if self:IsSessionEnded() then return end
-        if not self.IsAugmentPending then
-            log_warning("[GameManager] augment buy rejected: none pending")
+        if self:IsSessionEndedOf(s) then return end
+        if not s.IsAugmentPending then
+            log_warning(self:Tag(s) .. "augment buy rejected: none pending")
             return
         end
         -- 상환 미납(5/5) 상태면 정산이 우선.
-        if self.IsRepaymentDue then
-            log_warning("[GameManager] augment buy rejected: repayment due (settle first)")
+        if s.IsRepaymentDue then
+            log_warning(self:Tag(s) .. "augment buy rejected: repayment due (settle first)")
             return
         end
         -- 서버 권위 선택지 검증(위조 차단).
         local offered = false
-        for token in string.gmatch(self.AugmentChoicesData, "([^,]+)") do
+        for token in string.gmatch(s.AugmentChoicesData, "([^,]+)") do
             if token == augmentKey then offered = true break end
         end
         if not offered then
-            log_warning("[GameManager] augment buy rejected: '" .. tostring(augmentKey) .. "' not offered")
+            log_warning(self:Tag(s) .. "augment buy rejected: '" .. tostring(augmentKey) .. "' not offered")
             return
         end
         local def = _BlacksmithConfig:GetAugment(augmentKey)
         if def == nil then
-            log_warning("[GameManager] augment buy rejected: unknown '" .. tostring(augmentKey) .. "'")
+            log_warning(self:Tag(s) .. "augment buy rejected: unknown '" .. tostring(augmentKey) .. "'")
             return
         end
         local maxStage = _BlacksmithConfig:GetData().augmentMaxStage
-        local cur = self:GetAugmentStage(augmentKey)
+        local cur = self:GetAugmentStageOf(s, augmentKey)
         if cur >= maxStage then
-            log_warning("[GameManager] augment buy rejected: already max '" .. augmentKey .. "'")
+            log_warning(self:Tag(s) .. "augment buy rejected: already max '" .. augmentKey .. "'")
             return
         end
         -- 구매 비용(도달할 단계 기준) 검증·차감. (blacksmith_upgrade.md §3)
         local cost = _BlacksmithConfig:GetAugmentCost(cur + 1)
-        if self.Meso < cost then
-            log_warning("[GameManager] augment buy rejected: not enough meso (" .. tostring(self.Meso)
+        if s.Meso < cost then
+            log_warning(self:Tag(s) .. "augment buy rejected: not enough meso (" .. tostring(s.Meso)
                 .. " < " .. tostring(cost) .. ")")
             return
         end
-        self.Meso = self.Meso - cost
-        if self.OwnedAugments == nil then self.OwnedAugments = {} end
-        self.OwnedAugments[augmentKey] = cur + 1
-        self:SerializeAugments()
-        self:UpdateCanLoan()  -- 가격 협상 등 구매가에 영향 → 대출 조건 재평가.
-        log("[GameManager] augment bought: " .. augmentKey .. " -> stage " .. tostring(cur + 1)
-            .. " (-" .. tostring(cost) .. ", meso=" .. tostring(self.Meso) .. "), owned=" .. self.AugmentsData)
+        s.Meso = s.Meso - cost
+        if s.OwnedAugments == nil then s.OwnedAugments = {} end
+        s.OwnedAugments[augmentKey] = cur + 1
+        self:SerializeAugments(s)
+        self:UpdateCanLoan(s)  -- 가격 협상 등 구매가에 영향 → 대출 조건 재평가.
+        log(self:Tag(s) .. "augment bought: " .. augmentKey .. " -> stage " .. tostring(cur + 1)
+            .. " (-" .. tostring(cost) .. ", meso=" .. tostring(s.Meso) .. "), owned=" .. s.AugmentsData)
         -- 구매 완료 → 창 새로고침(재추첨). 3단계 소진 증강은 다음 풀에서 제외된다. (§4-4)
-        self:RollAugmentChoices()
-    end
-
-    -- ═══════════════ 증강 효과 계산 헬퍼 (Phase 8) ═══════════════
-
-    method integer GetEffectiveBuyCost(integer baseCost)
-        -- 증강 '가격 협상' 구매가 감소(%) 적용. 1000단위 반올림. 미보유면 원가.
-        -- @Sync AugmentsData 기반(GetSyncedAugmentStage)이라 서버 차감액과 클라 표시값이 항상 일치한다.
-        local stage = self:GetSyncedAugmentStage("priceNego")
-        if stage <= 0 then return baseCost end
-        local pct = _BlacksmithConfig:GetAugmentStageValue("priceNego", stage)
-        if pct <= 0 then return baseCost end
-        local reduced = baseCost * (1 - pct / 100)
-        return math.floor(reduced / 1000 + 0.5) * 1000
-    end
-
-    method integer ComputeRepayment(integer stage)
-        -- 실효 상환금 = 기본 상환금 × (1 + 위험거래 이자%). 1000단위 반올림. (Phase 8)
-        --   대출 빚(self.Debt)은 이 상환금과 별개로 상환 시점(RequestSettleDebt)에 합산한다.
-        local base = _BlacksmithConfig:GetDebtAmount(stage)
-        local riskPct = self:GetAugmentStageValueFor("riskyDeal")
-        local amount = base * (1 + riskPct / 100)
-        return math.floor(amount / 1000 + 0.5) * 1000
-    end
-
-    -- ═══════════════ 재정 관리 — 메소 대출 (Phase 9) ═══════════════
-
-    @ExecSpace("ServerOnly")
-    method void UpdateCanLoan()
-        -- 대출 가능 여부 재계산: 게임오버 아님 + 사용 횟수 남음 + '다음 행동이 막힘'. (finance §2)
-        --   현재 화면 상황(아이템 보유 여부)에 따라 '막힘'을 판정해 HUD 대출 유도 팝업 조건과 정합화한다.
-        --     · 아이템 미보유(상점 화면): 상점 무기를 하나도 살 수 없음 = 막힘.
-        --     · 아이템 보유(스크래치 화면): 이상한 큐브를 살 수 없음 = 막힘(판매 탈출은 조건에서 제외, §2 문구).
-        --   (아이템이 없으면 큐브를 쓸 대상 자체가 없으므로 큐브 비용은 무기 구매 불가만으로 판정한다.)
-        local loan = _BlacksmithConfig:GetLoanConfig()
-        if self:IsSessionEnded() or self.LoanUseCount >= loan.maxUses then
-            self.CanLoan = false
-            return
-        end
-        local stuck
-        if self.CurrentItemId ~= "" then
-            local weird = _BlacksmithConfig:GetCube("weird")
-            local cubeCost = (weird ~= nil) and weird.cost or 0
-            stuck = self.Meso < cubeCost
-        else
-            local minBuy = -1
-            if self.ShopSlots ~= nil then
-                for _, slot in ipairs(self.ShopSlots) do
-                    local g = _BlacksmithConfig:GetWeaponGrade(slot.grade)
-                    if g ~= nil then
-                        local c = self:GetEffectiveBuyCost(g.buyCost)
-                        if minBuy < 0 or c < minBuy then minBuy = c end
-                    end
-                end
-            end
-            stuck = (minBuy < 0) or (self.Meso < minBuy)
-        end
-        self.CanLoan = stuck
+        self:RollAugmentChoices(s)
     end
 
     @ExecSpace("Server")
     method void RequestLoan()
-        -- 메소 대출: 위기 대응. 조건 충족 시 즉시 지급 + 갚아야 할 빚 누적 + 사용 횟수 증가. (finance §2~§4)
+        -- 메소 대출 진입점. (finance §2~§4)
+        local s = self:GetSession(senderUserId)
+        self:DoLoan(s)
+        self:PushState(senderUserId)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void DoLoan(table s)
+        -- 메소 대출: 위기 대응. 조건 충족 시 즉시 지급 + 갚아야 할 빚 누적 + 사용 횟수 증가.
         --   금액 규칙(유저 확정): 지급 메소 = 현재 상환 필요 메소만큼, 빚도 그만큼 증가.
         --   즉 상환 시점에 '상환 필요 메소 + 빚'을 한 번에 갚아야 한다(예: 상환 45,000이면 45,000 받고 빚 45,000 → 정산 90,000).
-        if self:IsSessionEnded() then
-            log_warning("[GameManager] loan rejected: session ended")
+        if self:IsSessionEndedOf(s) then
+            log_warning(self:Tag(s) .. "loan rejected: session ended")
             return
         end
-        self:UpdateCanLoan()
-        if not self.CanLoan then
-            log_warning("[GameManager] loan rejected: conditions not met (meso=" .. tostring(self.Meso)
-                .. ", uses=" .. tostring(self.LoanUseCount) .. ")")
+        self:UpdateCanLoan(s)
+        if not s.CanLoan then
+            log_warning(self:Tag(s) .. "loan rejected: conditions not met (meso=" .. tostring(s.Meso)
+                .. ", uses=" .. tostring(s.LoanUseCount) .. ")")
             return
         end
-        local amount = self:GetCurrentRepayment()
-        self.Meso = self.Meso + amount
-        self.Debt = self.Debt + amount
-        self.LoanUseCount = self.LoanUseCount + 1
-        self:UpdateCanLoan()
-        log("[GameManager] LOAN granted: +" .. tostring(amount) .. ", uses=" .. tostring(self.LoanUseCount)
-            .. ", meso=" .. tostring(self.Meso) .. ", debt=" .. tostring(self.Debt))
+        local amount = self:GetCurrentRepaymentOf(s)
+        s.Meso = s.Meso + amount
+        s.Debt = s.Debt + amount
+        s.LoanUseCount = s.LoanUseCount + 1
+        self:UpdateCanLoan(s)
+        log(self:Tag(s) .. "LOAN granted: +" .. tostring(amount) .. ", uses=" .. tostring(s.LoanUseCount)
+            .. ", meso=" .. tostring(s.Meso) .. ", debt=" .. tostring(s.Debt))
     end
 
     -- ═══════════════ 로비 상태 전이 API (Phase 5) ═══════════════
@@ -887,43 +1176,26 @@ script GameManager extends Logic
     @ExecSpace("Server")
     method void EnterActivity(string activity)
         -- 로비 → 활동 진입 전이. 허용된 활동만("cube"/"augment"/"finance"). UI/맵이 이 상태로 화면 전환. (lobby_hub.md §5)
-        if self:IsSessionEnded() then return end
-        if activity ~= "cube" and activity ~= "augment" and activity ~= "finance" then
-            log_warning("[GameManager] enter rejected: bad activity '" .. tostring(activity) .. "'")
+        local s = self:GetSession(senderUserId)
+        if self:IsSessionEndedOf(s) then
+            self:PushState(senderUserId)
             return
         end
-        self.CurrentActivity = activity
-        log("[GameManager] activity -> " .. activity)
+        if activity ~= "cube" and activity ~= "augment" and activity ~= "finance" then
+            log_warning(self:Tag(s) .. "enter rejected: bad activity '" .. tostring(activity) .. "'")
+        else
+            s.CurrentActivity = activity
+            log(self:Tag(s) .. "activity -> " .. activity)
+        end
+        self:PushState(senderUserId)
     end
 
     @ExecSpace("Server")
     method void ReturnToLobby()
         -- 활동 종료 → 로비 복귀. (lobby_hub.md §5-7)
-        self.CurrentActivity = "lobby"
-        log("[GameManager] activity -> lobby")
-    end
-
-    -- ═══════════════ 게임오버 기록 (Phase 2) ═══════════════
-
-    @ExecSpace("ServerOnly")
-    method void RecordGameOver()
-        -- 게임오버 시 최종 결과 5개 항목을 영구 저장. (flow §게임오버 표시 정보)
-        -- ⚠ DataStorage는 Credit 과금 → 게임오버 1회성 이벤트에서만 호출(OnUpdate/타이머 금지). datastorage.md 준수.
-        if self.recordStorage == nil then
-            log_warning("[GameManager] record skip: no storage handle")
-            return
-        end
-        local record = {
-            finalMeso = self.Meso,
-            totalCubes = self.CubeUseCount,
-            totalSells = self.TotalSellCount,
-            maxSellPrice = self.MaxSellPrice,
-            finalDebtStage = self.DebtStage,
-        }
-        -- 마지막 판 기록(단일 키, 값 4KB 미만 → 1 Credit). 비동기 저장(프레임 보호).
-        self.recordStorage:SetAsync("lastRun", _UtilLogic:TableToString(record), nil)
-        log("[GameManager] game over recorded: meso=" .. tostring(record.finalMeso)
-            .. ", cubes=" .. tostring(record.totalCubes) .. ", sells=" .. tostring(record.totalSells)
-            .. ", maxPrice=" .. tostring(record.maxSellPrice) .. ", debtStage=" .. tostring(record.finalDebtStage))
+        local s = self:GetSession(senderUserId)
+        s.CurrentActivity = "lobby"
+        log(self:Tag(s) .. "activity -> lobby")
+        self:PushState(senderUserId)
     end
 end

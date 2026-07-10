@@ -1,24 +1,33 @@
 @Logic
 script ClickOnlyController extends Logic
-    -- 클릭 전용 게임 유지: 횡스크롤 캐릭터가 필요 없으므로 로컬 플레이어 캐릭터를 숨기고
+    -- 클릭 전용 게임 유지: 횡스크롤 캐릭터가 필요 없으므로 플레이어 캐릭터를 숨기고
     -- 이동 입력을 막는다(컨트롤러 비활성). Global/DefaultPlayer.model은 읽기 전용이라 런타임에서 처리한다.
-    -- 클라이언트에서만 동작하며, 로컬 플레이어가 준비되면 1회만 적용한다.
+    -- 싱글게임 몰입(유저 확정): 내 캐릭터뿐 아니라 다른 플레이어 아바타도 전부 숨긴다.
+    -- 클라이언트에서만 동작. OnUpdate에서 전체 유저를 순회(레벨 구동: Visible이 켜져 있으면 끔)하므로
+    -- 늦게 입장한 유저도 자동으로 숨겨진다. UserEntities는 ReadOnlyDictionary — .Values(plain table)로 순회.
 
-    property boolean applied = false
+    property boolean controllerOff = false -- 로컬 플레이어 컨트롤러 비활성 완료 여부
 
     @ExecSpace("ClientOnly")
     method void OnUpdate(number delta)
-        -- 로컬 플레이어가 생성되면 캐릭터를 숨기고 컨트롤러를 끈다(최초 1회).
-        if self.applied then return end
-        local lp = _UserService.LocalPlayer
-        if not isvalid(lp) then return end
-
-        lp.Visible = false  -- 아바타 렌더 숨김
-        local pcc = lp.PlayerControllerComponent
-        if isvalid(pcc) then
-            pcc.Enable = false  -- 키 입력 → 이동/점프 액션 처리 비활성
+        -- 모든 유저 엔티티를 숨기고(내 화면 기준), 로컬 플레이어는 이동 컨트롤러도 끈다(최초 1회).
+        for _, userEntity in ipairs(_UserService.UserEntities.Values) do
+            if isvalid(userEntity) and userEntity.Visible then
+                userEntity.Visible = false  -- 아바타 렌더 숨김
+                log("[ClickOnlyController] player hidden (click-only): " .. tostring(userEntity.Name))
+            end
         end
-        self.applied = true
-        log("[ClickOnlyController] local player hidden + controller disabled (click-only)")
+
+        if not self.controllerOff then
+            local lp = _UserService.LocalPlayer
+            if isvalid(lp) then
+                local pcc = lp.PlayerControllerComponent
+                if isvalid(pcc) then
+                    pcc.Enable = false  -- 키 입력 → 이동/점프 액션 처리 비활성(로컬만)
+                end
+                self.controllerOff = true
+                log("[ClickOnlyController] local controller disabled")
+            end
+        end
     end
 end

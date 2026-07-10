@@ -54,12 +54,21 @@
 
 ## 구현된 기능
 - **대장장이 코어(Blacksmith) — 서버 권위 게임 로직** — `RootDesk/MyDesk/Blacksmith/`.
-  - `GameManager.mlua` (`@Logic`, 전역 단일 세션) — 플레이어 상태 + 모든 규칙의 권위. 상태는 `@Sync` property로 HUD에 노출:
-    `Meso` / `CurrentItemId` / `CubeUseCount` / `HasPotential` / `CurrentGrade` / `CurrentPrice` / `IsCurrentDestroyed` /
+  - `GameManager.mlua` (`@Logic`, **유저별 독립 세션** — 싱글게임) — 플레이어 상태 + 모든 규칙의 권위.
+    **서버 진실 = `Sessions[userId]` 테이블**(스칼라 32개 + 중첩 `ShopSlots`/`CurrentPotential`/`OwnedAugments` + `UserId`).
+    클라 노출 = 같은 이름의 **plain property 미러**(@Sync 아님): 각 Server RPC 말미 `PushState(userId)`가 32개 스칼라를
+    `ApplySessionState(state, targetUserId)`(targeted Client RPC, call-site 마지막 인자=UserId)로 **해당 유저에게만** 전송.
+    미러 property: `Meso` / `CurrentItemId` / `CubeUseCount` / `HasPotential` / `CurrentGrade` / `CurrentPrice` / `IsCurrentDestroyed` /
     `CubesUntilRepayment` / `IsRepaymentDue` / `PendingRepayment` / `DebtStage` / `IsGameOver` /
     `TotalSellCount` / `MaxSellPrice`(게임오버 기록용) / `AugmentsData`·`AugmentChoicesData`·`IsAugmentPending`(증강, CSV) /
     `LoanUseCount`·`CanLoan`(대출) / `CurrentActivity`("lobby"/"cube"/"augment"/"finance", 로비 전이).
-    (단, `CurrentPotential` 옵션 3줄·`OwnedAugments`는 중첩 테이블이라 `@Sync` 불가 → 옵션은 Client RPC, 증강은 `AugmentsData` CSV로 전달.)
+    (이 문서의 다른 항목에서 "@Sync"라 적힌 GameManager 상태 서술은 전부 이 **미러 property**를 뜻한다 — 클라 폴링 패턴은 동일.)
+    **세션 라이프사이클**: `UserEnterEvent` → `ResetSessionFor(userId)` / `UserLeaveEvent` → 세션 삭제(**재접속 = 새 게임**, 유저 확정) /
+    클라 `OnUpdate` 최초 1회 `RequestInitialSync()` 핸드셰이크로 초기 미러 수신(입장 레이스 차단).
+    **RPC 패턴**: 각 `@ExecSpace("Server")` RPC = `GetSession(senderUserId)` → `Do*(s)`(ServerOnly 본문, early return 가능) → `PushState` 3줄 래퍼.
+    **헬퍼 이원화**: 클라 미러 판독용(`IsSessionEnded`/`GetCurrentDay`/`GetCurrentRepayment`/`GetSyncedAugmentStage`/`GetEffectiveBuyCost`, ExecSpace 없음)
+    vs 서버 세션용 `...Of(s)` 변형(`IsSessionEndedOf`/`GetCurrentRepaymentOf`/`GetEffectiveBuyCostOf`/`GetAugmentStageOf`/`GetAugmentStageValueOf`/`ComputeRepaymentOf`).
+    ⚠ 서버 코드에서 클라 판독용 헬퍼 호출 금지(서버 property 사본은 진실 아님).
   - UI→서버 RPC 엔트리포인트(전부 `@ExecSpace("Server")`, 클라 입력 불신·서버 전량 검증):
     `_GameManager:RequestBuyItem(slotIndex)`(상점 슬롯 인덱스로 구매) / `RequestUseCube()` / **`RequestSellItem()`(판매 **확정만** — 즉시 지급 안 함, `IsSalePending`으로 전환·아이템 유지) / `RequestCollectSale()`(수령 — 이때 메소 지급 + 아이템 정리)** /
     `RequestConfirmDestroy()`(파괴 아이템 정리) / `RequestSettleDebt()`(상환·부족 시 게임오버) /
@@ -73,8 +82,8 @@
     - **대장 기술(증강) — 골드 구매형(구현 완료)**: `ResetSession`에서 `RollAugmentChoices` 1회 롤(세션 시작부터 3택 상시 준비) → 로비 '대장 기술' 버튼 → `_AugmentManager:Open()` → `RequestSelectAugment(key)`가 **도달 단계 기준 비용 검증·차감**(`BlacksmithConfig.augmentCosts={7500,12500,20000}` → `GetAugmentCost(stage)`) + 중복 시 단계 상승(최대 3) + **구매 성공 시 `RollAugmentChoices` 재추첨**(§4-4 새로고침). 무료 3택 폐지(`RequestSettleDebt`의 `RollAugmentChoices` 호출 제거). 효과 배선(불변): 더좋은물품→`RollShop` 등급확률(`betterGoodsGradeProb`) / 대장장이의눈→`RollLine` 유효옵션(`smithEye` 10/20/45%) / 가격협상→`GetEffectiveBuyCost` 구매가(`priceNego` 10/18/40%) / 위험거래→판매가·`ComputeRepayment` 이자(`riskyDeal` 10/20/30%). 클라 가격 표시는 `GetSyncedAugmentStage`(AugmentsData 파싱)로 단계 읽어 `GetAugmentCost(stage+1)`. 증강 아이콘은 `d.augments.*.icon`(plain 스프라이트 RUID). UI는 아래 **대장 기술 업그레이드 UI** 항목 참조.
     - **메소 대출**: `RequestLoan()` — 조건(`UpdateCanLoan`: 아이템 미보유면 상점 무기 전부 구매불가 / 보유면 큐브 구매불가) 충족 시 **지급 메소 = 현재 상환 필요 메소(`GetCurrentRepayment()`), 빚 `Debt += 같은 금액`** + **1회 제한**(`loan.maxUses`). 즉 상환 필요 메소만큼 받고 그만큼 빚져서, 상환 시 `상환금+빚`을 한 번에 청구(예: 상환 45,000 → 45,000 받고 빚 45,000 → 정산 90,000). ⚠ 기존 "고정 지급 100,000 / 빚 원금×2" 및 "상환금 2배(`LoanPenaltyPending`)" 방식은 모두 폐기. `d.loan`은 `maxUses`만 남김(금액은 동적).
     - **상환+빚 청산**: `RequestSettleDebt()` — 상환 시점(5/5) 도달 시 `PendingRepayment + Debt`를 전부 갚아야 통과(부족 시 게임오버). 성공 시 `Debt=0`·`DebtStage+1`. (⚠ 증강은 상환 보상이 아니라 골드 구매형 — 여기서 `RollAugmentChoices` 호출하지 않는다.) 다음 라운드 전환 시스템은 미구현 → `log("NEXT WEEK: day=N주차 …")`로만 알림.
-    - **게임오버 기록**: `RecordGameOver()` — 게임오버 시 5개 항목(최종메소/큐브수/판매수/최고판매가/상환단계)을 `_DataStorageService:GetGlobalDataStorage("BlacksmithRecords")` 키 `lastRun`에 저장(Credit 절약 위해 1회성).
-    - **재시작**: `RequestRestart()` — 게임오버 상태에서만, `ResetSession()`으로 현재 판 전체 리셋(증강·대출·통계 포함, DataStorage 누적은 보존).
+    - **게임오버 기록**: `RecordGameOver(s)` — 게임오버 시 5개 항목(최종메소/큐브수/판매수/최고판매가/상환단계)을 `_DataStorageService:GetGlobalDataStorage("BlacksmithRecords")` **유저별 키 `lastRun:<userId>`**에 저장(Credit 절약 위해 1회성).
+    - **재시작**: `RequestRestart()` — 게임오버 상태에서만, `ResetSessionFor(senderUserId)`로 **요청한 유저의 세션만** 전체 리셋(증강·대출·통계 포함, DataStorage 누적은 보존).
     - **일차 규약**: 별도 시간 시스템 없이 **일차 = `DebtStage + 1`**(A안). 서버 `GetCurrentDay()`, 클라는 직접 계산.
     - ✔ **상환금 표시(해결됨)**: 위험거래·대출 적용 후 실제 상환금은 `PendingRepayment`(=`ComputeRepayment`). 공용 상단 HUD(`HudManager`)가 상환 필요 메소를 `PendingRepayment` 우선(미보류 시 `GetDebtAmount(DebtStage+1)` 폴백)으로 표시하도록 이미 정합화됨.
 - **무기 구매 상점(Weapon shop) UI** — `RootDesk/MyDesk/Blacksmith/WeaponShopManager.mlua`(`@Logic`, 클라), `ui/WeaponShopGroup.ui`.
@@ -88,7 +97,7 @@
   - 상점 보드 **표시/재추첨 시점**에 `_GameManager:RequestShopStuckCheck()`를 호출해 weapon 스턱 게임오버를 서버 판정(로비에서는 판정 안 함 — 아래 GameFlow 항목 참조).
   - **슬롯머신 스핀 연출(클라 전용)**: 새 `ShopSlotsData` 도착(`lastShopData` 변화) 시 즉시 렌더 대신 `StartSpin` — 슬롯별 `ReelMask`(마스크+ReelIcon 2장 leapfrog 세로 스크롤, 랩마다 무작위 무기 썸네일+슬롯 무작위 등급색 틴트)가 돌다가 **위→아래 순차 정지**(`SpinStopBase`/`SpinStopGap`, 정지 직전 감속). 정지 시 `RenderSlot` 복원+정지음+아이콘 펀치. 스핀 중 슬롯 클릭/구매 가드(`spinning`), 재입장(데이터 불변)은 스핀 없음, 화면 이탈 시 `FinishSpinInstant`. 증강 변화 재렌더는 스핀 중 보류→종료 시 일괄.
   - **등급 반짝 이펙트(`GetSparkleLevel`)**: 현재 확률표(`GetShopGradeProbTable(GetSyncedAugmentStage("betterGoods"))`)에 **레전더리>0이면(2~3단계) 유니크=L2/레전더리=L3(에픽은 일반)**, 닫혀 있으면(0~1단계) **에픽=L1/유니크=L2**. L1=별 팝 클립(`5c7fcd92…`)+플래시, L2=별 링 버스트(`58a7d489…`, 강화성공풍)+파티클+성공음(`b060035a…`), L3=링 대형+글리터 필드(`c4705494…`)+팡파레(`cb270655…`). SparkleFX는 animationclip RUID를 **접두사 없이** ImageRUID에 직접 설정(재생). FX 엔티티는 .ui에서 **켜진 채 저작**(꺼진 자식은 GetChildByName 캐시 누락 위험) → OnBeginPlay `ResetFXEntities`로 끔. 연출 튜닝은 전부 인스펙터 property(SSOT).
-- **클릭 전용 캐릭터 처리** — `RootDesk/MyDesk/Player/ClickOnlyController.mlua`(`@Logic`, 클라). 로컬 플레이어 `Visible=false` + `PlayerControllerComponent.Enable=false`(이동 입력 차단). Global 모델은 읽기전용이라 런타임에서 처리.
+- **클릭 전용 캐릭터 처리** — `RootDesk/MyDesk/Player/ClickOnlyController.mlua`(`@Logic`, 클라). **모든 유저 엔티티** `Visible=false`(싱글게임 몰입 — `_UserService.UserEntities.Values` 순회, 레벨 구동이라 늦게 입장한 유저도 자동 커버) + 로컬 플레이어만 `PlayerControllerComponent.Enable=false`(이동 입력 차단). Global 모델은 읽기전용이라 런타임에서 처리.
 - **복권 긁기(Scratch-ticket) UI** — `RootDesk/MyDesk/ScratchTicket/`, `ui/ScratchTicketGroup.ui`.
   `ScratchTicketManager.mlua`(`@Component`)가 3장의 은박 픽셀캔버스(`PixelGUIRendererComponent`)를 숨겨진 "당첨" 레이어 위에 깔고,
   클릭/드래그로 알파를 깎아 긁음(70% 도달 시 완료 이벤트). 격자해상도/브러시반경/강도/완료기준/대상맵은
