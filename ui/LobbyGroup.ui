@@ -115,7 +115,7 @@
       {
         "id": "ec5e2de3-801a-490a-8820-9d37674ceb75",
         "path": "/ui/LobbyGroup/BtnSkill",
-        "componentNames": "MOD.Core.UITransformComponent,MOD.Core.SpriteGUIRendererComponent,MOD.Core.ButtonComponent",
+        "componentNames": "MOD.Core.UITransformComponent,MOD.Core.SpriteGUIRendererComponent,MOD.Core.ButtonComponent,MOD.Core.CanvasGroupComponent",
         "jsonString": {
           "name": "BtnSkill",
           "path": "/ui/LobbyGroup/BtnSkill",
@@ -301,6 +301,13 @@
               "OverrideSorting": false,
               "SortingLayer": "UI",
               "Transition": 1,
+              "Enable": true
+            },
+            {
+              "@type": "MOD.Core.CanvasGroupComponent",
+              "BlocksRaycasts": true,
+              "GroupAlpha": 1.0,
+              "Interactable": true,
               "Enable": true
             }
           ],
@@ -1028,7 +1035,7 @@
       {
         "id": "6072d905-8310-4e23-8f6e-522bcf4fb0c6",
         "path": "/ui/LobbyGroup/BtnFinance",
-        "componentNames": "MOD.Core.UITransformComponent,MOD.Core.SpriteGUIRendererComponent,MOD.Core.ButtonComponent",
+        "componentNames": "MOD.Core.UITransformComponent,MOD.Core.SpriteGUIRendererComponent,MOD.Core.ButtonComponent,MOD.Core.CanvasGroupComponent",
         "jsonString": {
           "name": "BtnFinance",
           "path": "/ui/LobbyGroup/BtnFinance",
@@ -1214,6 +1221,13 @@
               "OverrideSorting": false,
               "SortingLayer": "UI",
               "Transition": 1,
+              "Enable": true
+            },
+            {
+              "@type": "MOD.Core.CanvasGroupComponent",
+              "BlocksRaycasts": true,
+              "GroupAlpha": 1.0,
+              "Interactable": true,
               "Enable": true
             }
           ],
