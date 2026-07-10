@@ -32,9 +32,8 @@ script ScratchTicketManager extends Component
     property TextComponent label2 = "2a9c1ccf-6aee-4898-b442-01e3c3d82317"
     property TextComponent label3 = "d898eb75-1c65-48c9-8ab4-912b0ce643b7"
 
-    -- center cube icon + bottom buttons
+    -- center cube icon + bottom buttons (재사용 버튼 폐지 → 재굴림은 좌측 구매창 큐브 클릭)
     property Entity centerCube = "fb64e4b9-cff2-4105-ba21-2e8ca5d6b86d"
-    property Entity reuseButton = "aabf3d1a-7f60-45b3-820f-93746fb52b1e"
     property Entity sellButton = "c4912f88-2d35-4e7e-a1e2-b017fc3aa5e9"
 
     -- left cube selection
@@ -81,6 +80,10 @@ script ScratchTicketManager extends Component
     property number PriceFlashTime = 0.5        -- 플래시 지속(초)
     property number DeltaRiseTime = 0.9         -- "+n" 델타 팝업 상승·페이드 시간(초)
     property number DeltaRiseDist = 46          -- 델타 팝업이 떠오르는 거리(px)
+
+    -- ===== 큐브 구매창(CubeSelect) 슬라이드 전환 튜닝 (인스펙터 SSOT) =====
+    property number CubeSlideOffset = 480       -- 큐브 사용 시 구매창이 보드 뒤로 밀려들어갈 X 거리(px, +=보드 방향). 도달 시 숨김.
+    property number CubeSlideSpeed = 2400       -- 슬라이드 속도(px/s). 목표까지 선형 이동 후 스냅.
 
     -- ===== 옵션 라벨 공개 tweening 튜닝 (인스펙터 SSOT) =====
     property number LabelPunchTime = 0.45       -- 라벨 팝 지속(초)
@@ -130,6 +133,12 @@ script ScratchTicketManager extends Component
     property boolean destroyPending = false
     property number destroyTimer = 0
     property number boardBaseX = 0
+
+    -- 큐브 구매창 슬라이드 런타임 상태
+    property number cubeSelectBaseX = 0      -- 노출(out) 위치 X(OnBeginPlay 캡처)
+    property number cubeSelectCurX = 0       -- 현재 X(매 프레임 목표로 이동)
+    property boolean cubeShownTarget = true  -- true=노출 위치로, false=보드 뒤(숨김) 위치로
+    property boolean cubeBaseCaptured = false -- baseX 캡처 여부
 
     -- 5/5(상환 미납) 도달 시 큐브 재사용·구매 잠금 상태 추적(레벨 구동 변화 감지)
     property boolean lastRepayDue = false
@@ -183,12 +192,11 @@ script ScratchTicketManager extends Component
         self.touchHandler = _InputService:ConnectEvent(ScreenTouchEvent, self.OnTouchBegin)
         self.holdHandler = _InputService:ConnectEvent(ScreenTouchHoldEvent, self.OnTouchHold)
 
-        -- 큐브 선택(아이콘/구매버튼) → 사용. 재사용/판매 버튼.
+        -- 큐브 선택(아이콘/구매버튼) → 사용/재굴림. 판매 버튼. (재사용 버튼 폐지)
         self:WireClick(self.cubeIconWeird, self.OnUseWeird)
         self:WireClick(self.weirdBuyButton, self.OnUseWeird)
         self:WireClick(self.cubeIconMaster, self.OnUseMaster)
         self:WireClick(self.masterBuyButton, self.OnUseMaster)
-        self:WireClick(self.reuseButton, self.OnReuseClicked)
         self:WireClick(self.sellButton, self.OnSellClicked)
         self:WireClick(self.collectButton, self.OnCollectClicked)
         self:WireClick(self.confirmYesButton, self.OnConfirmSellYes)
@@ -203,6 +211,13 @@ script ScratchTicketManager extends Component
 
         if isvalid(self.board) and isvalid(self.board.UITransformComponent) then
             self.boardBaseX = self.board.UITransformComponent.anchoredPosition.x
+        end
+
+        -- 큐브 구매창 노출 위치(out) 캡처 → 이 위치에서 보드 뒤로 슬라이드.
+        if isvalid(self.cubeSelect) and isvalid(self.cubeSelect.UITransformComponent) then
+            self.cubeSelectBaseX = self.cubeSelect.UITransformComponent.anchoredPosition.x
+            self.cubeSelectCurX = self.cubeSelectBaseX
+            self.cubeBaseCaptured = true
         end
 
         -- 렌더 순서 강제: 흰 배경판은 맨 뒤로, 은색 부스러기는 UI 맨 위로.
@@ -341,6 +356,10 @@ script ScratchTicketManager extends Component
                 _UILogic:SetSiblingIndex(bg.UITransformComponent, 0)
             end
         end
+        -- 큐브 구매창은 루트 형제 중 맨 뒤(먼저 그림)로 → 슬라이드 인 시 보드에 가려져 "뒤로 들어가" 사라진다.
+        if isvalid(self.cubeSelect) and isvalid(self.cubeSelect.UITransformComponent) then
+            _UILogic:SetSiblingIndex(self.cubeSelect.UITransformComponent, 0)
+        end
         -- 앞으로 끌어올 순서: 부스러기 → 코인 → 판매결과 창(마지막 호출이 가장 앞).
         self:BringToFront(self.crumbLayer)
         self:BringToFront(self.coinLayer)
@@ -412,18 +431,64 @@ script ScratchTicketManager extends Component
         self:UpdatePriceScroll(delta)
         self:UpdatePriceFX(delta)
         self:UpdateCoins(delta)
+        self:UpdateCubeSlide(delta)
     end
 
     @ExecSpace("ClientOnly")
     method void SetContainersActive(boolean on)
         -- 루트 직속 컨테이너들을 한꺼번에 토글(board/시계/큐브선택/HUD). 판매가창은 별도(공개 완료 시만).
         if isvalid(self.board) then self.board.Enable = on end
-        if isvalid(self.cubeSelect) then self.cubeSelect.Enable = on end
+        -- 큐브 구매창은 슬라이드 상태로 관리(진입/이탈은 즉시 스냅). SetupScratch/OnAllRevealed이 인/아웃 애니메이션.
+        self:SetCubeSelectShown(on, true)
         if not on and isvalid(self.priceWindow) then self.priceWindow.Enable = false end
         if not on then self:HideConfirmSell() end
         if not on then self:HideSaleResult() end
         if not on then self:StopCoins() end
         if not on then self.scratchReady = false end   -- 맵 이탈/아이템 없음 → 긁기 차단.
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SetCubeSelectShown(boolean shown, boolean instant)
+        -- 큐브 구매창 노출/숨김 목표 설정. shown=true면 노출 위치(baseX)로, false면 보드 뒤(baseX+offset)로 슬라이드.
+        -- instant=true면 즉시 스냅(진입/이탈 게이팅). 노출 시작 시 Enable=true, 숨김 도달 시 Enable=false.
+        if not isvalid(self.cubeSelect) or not isvalid(self.cubeSelect.UITransformComponent) then return end
+        if not self.cubeBaseCaptured then
+            self.cubeSelectBaseX = self.cubeSelect.UITransformComponent.anchoredPosition.x
+            self.cubeSelectCurX = self.cubeSelectBaseX
+            self.cubeBaseCaptured = true
+        end
+        self.cubeShownTarget = shown
+        if shown then self.cubeSelect.Enable = true end   -- 노출은 먼저 켜고 슬라이드
+        if instant then
+            local targetX = shown and self.cubeSelectBaseX or (self.cubeSelectBaseX + self.CubeSlideOffset)
+            self.cubeSelectCurX = targetX
+            local p = self.cubeSelect.UITransformComponent.anchoredPosition
+            self.cubeSelect.UITransformComponent.anchoredPosition = Vector2(targetX, p.y)
+            if not shown then self.cubeSelect.Enable = false end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateCubeSlide(number delta)
+        -- 큐브 구매창을 목표 X로 선형 이동(슬라이드). 숨김 목표 도달 시 Enable=false.
+        if not isvalid(self.cubeSelect) or not isvalid(self.cubeSelect.UITransformComponent) then return end
+        local targetX = self.cubeShownTarget and self.cubeSelectBaseX or (self.cubeSelectBaseX + self.CubeSlideOffset)
+        if self.cubeSelectCurX == targetX then
+            if (not self.cubeShownTarget) and self.cubeSelect.Enable then self.cubeSelect.Enable = false end
+            return
+        end
+        local step = self.CubeSlideSpeed * delta
+        local dx = targetX - self.cubeSelectCurX
+        if math.abs(dx) <= step then
+            self.cubeSelectCurX = targetX
+        else
+            self.cubeSelectCurX = self.cubeSelectCurX + (dx > 0 and step or -step)
+        end
+        local p = self.cubeSelect.UITransformComponent.anchoredPosition
+        self.cubeSelect.UITransformComponent.anchoredPosition = Vector2(self.cubeSelectCurX, p.y)
+        if (not self.cubeShownTarget) and self.cubeSelectCurX == targetX then
+            self.cubeSelect.Enable = false
+        end
     end
 
     @ExecSpace("ClientOnly")
@@ -434,7 +499,8 @@ script ScratchTicketManager extends Component
         if isvalid(self.ticket2) then self.ticket2.Enable = false end
         if isvalid(self.ticket3) then self.ticket3.Enable = false end
         if isvalid(self.priceWindow) then self.priceWindow.Enable = false end
-        self:SetButtonEnabled(self.reuseButton, false)
+        -- 대기 상태(큐브 미사용): 좌측 구매창 노출(활성 중일 때만 슬라이드; OnBeginPlay 비활성 시엔 게이팅 유지).
+        if self.isActive then self:SetCubeSelectShown(true, false) end
         -- 큐브 사용 전에는 판매 불가(재사용 버튼과 함께 비활성화). 판매는 큐브 사용 후 3줄 공개(OnAllRevealed) 시에만 활성.
         self:SetButtonEnabled(self.sellButton, false)
         self.revealedCount = 0
@@ -518,8 +584,9 @@ script ScratchTicketManager extends Component
         self.revealedBonusSum = 0
         self.priceFrozen = false
         self:ResetPriceDisplay(_GameManager.CurrentBasePrice)
-        self:SetButtonEnabled(self.reuseButton, false)
         self:SetButtonEnabled(self.sellButton, false)
+        -- 큐브 사용 → 구매창을 보드 뒤로 슬라이드시켜 숨김(스크래치 몰입).
+        self:SetCubeSelectShown(false, false)
         self.scratchReady = true   -- 은박 3줄 표시 완료 → 이제부터 긁기 허용.
         log("[ScratchTicket] setup scratch: grade=" .. (fields[2] or "?") .. " cube=" .. self.lastCubeType
             .. " base=" .. tostring(_GameManager.CurrentBasePrice))
@@ -965,7 +1032,6 @@ script ScratchTicketManager extends Component
         if self.destroyPending then return end   -- 중복 트리거 방지
         self.destroyPending = true
         self.destroyTimer = 0
-        self:SetButtonEnabled(self.reuseButton, false)
         self:SetButtonEnabled(self.sellButton, false)
         log("[ScratchTicket] destroy sequence started")
     end
@@ -984,8 +1050,9 @@ script ScratchTicketManager extends Component
         if isvalid(self.priceWindow) then self.priceWindow.Enable = true end
         -- 최종 판매가로 카운트업(서버 CurrentPrice가 SSOT — per-line 누적치엔 등급 배수가 없으므로 여기서 확정).
         self:StartPriceScroll(_GameManager.CurrentPrice)
-        -- 5/5(상환 미납) 도달 시 재사용 금지 — 팔기만 가능. (다음주 정산 흐름)
-        self:SetButtonEnabled(self.reuseButton, not _GameManager.IsRepaymentDue)
+        -- 3줄 공개 완료 → 좌측 구매창을 다시 슬라이드 아웃(노출). 큐브 아이콘 클릭으로 재굴림 가능.
+        -- (5/5 상환 미납이면 구매창은 나오되 RefreshCubeLock이 큐브 잠금 — 판매만 가능.)
+        self:SetCubeSelectShown(true, false)
         self:SetButtonEnabled(self.sellButton, true)
         log("[ScratchTicket] all revealed -> price=" .. tostring(_GameManager.CurrentPrice)
             .. " = " .. _GameManager.CurrentPriceFormula
@@ -1146,15 +1213,14 @@ script ScratchTicketManager extends Component
 
     @ExecSpace("ClientOnly")
     method void RefreshCubeLock()
-        -- 5/5(상환 미납) 잠금 적용: 큐브 선택 4개(아이콘+구매 버튼) 비활성 + 재사용 비활성.
-        -- 해제 시 큐브 버튼만 복원(재사용은 공개 완료 시점에 OnAllRevealed가 결정).
+        -- 5/5(상환 미납) 잠금 적용: 큐브 선택 4개(아이콘+구매 버튼) 비활성 → 재굴림 불가, 판매만 가능.
+        -- 해제 시 큐브 버튼 복원.
         local locked = _GameManager.IsRepaymentDue
         self:SetButtonEnabled(self.cubeIconWeird, not locked)
         self:SetButtonEnabled(self.cubeIconMaster, not locked)
         self:SetButtonEnabled(self.weirdBuyButton, not locked)
         self:SetButtonEnabled(self.masterBuyButton, not locked)
         if locked then
-            self:SetButtonEnabled(self.reuseButton, false)
             log("[ScratchTicket] 5/5 repayment due -> cube buttons locked (sell only)")
         end
     end
@@ -1169,12 +1235,6 @@ script ScratchTicketManager extends Component
     method void OnUseMaster()
         -- 장인의 큐브 사용 요청.
         self:UseCube("master")
-    end
-
-    @ExecSpace("ClientOnly")
-    method void OnReuseClicked()
-        -- 한 번 더 사용하기: 마지막 사용한 큐브로 재추첨.
-        self:UseCube(self.lastCubeType)
     end
 
     @ExecSpace("ClientOnly")
@@ -1202,7 +1262,6 @@ script ScratchTicketManager extends Component
         log("[ScratchTicket] request sell (with potential)")
         _GameManager:RequestSellItem()
         self:SetButtonEnabled(self.sellButton, false)
-        self:SetButtonEnabled(self.reuseButton, false)
     end
 
     @ExecSpace("ClientOnly")
