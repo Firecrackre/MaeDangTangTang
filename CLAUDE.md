@@ -61,12 +61,13 @@
     `LoanUseCount`·`CanLoan`(대출) / `CurrentActivity`("lobby"/"cube"/"augment"/"finance", 로비 전이).
     (단, `CurrentPotential` 옵션 3줄·`OwnedAugments`는 중첩 테이블이라 `@Sync` 불가 → 옵션은 Client RPC, 증강은 `AugmentsData` CSV로 전달.)
   - UI→서버 RPC 엔트리포인트(전부 `@ExecSpace("Server")`, 클라 입력 불신·서버 전량 검증):
-    `_GameManager:RequestBuyItem(slotIndex)`(상점 슬롯 인덱스로 구매) / `RequestUseCube()` / `RequestSellItem()` /
+    `_GameManager:RequestBuyItem(slotIndex)`(상점 슬롯 인덱스로 구매) / `RequestUseCube()` / **`RequestSellItem()`(판매 **확정만** — 즉시 지급 안 함, `IsSalePending`으로 전환·아이템 유지) / `RequestCollectSale()`(수령 — 이때 메소 지급 + 아이템 정리)** /
     `RequestConfirmDestroy()`(파괴 아이템 정리) / `RequestSettleDebt()`(상환·부족 시 게임오버) /
     `RequestSelectAugment(key)`(증강 3택 선택) / `RequestLoan()`(메소 대출) / `RequestRestart()`(게임오버 후 전체 초기화) /
     `EnterActivity(name)`·`ReturnToLobby()`(로비 상태 전이). UI 버튼을 여기에 연결한다.
     (`Debt`: 대출로 누적된 갚아야 할 빚 @Sync. 대출 1회당 **현재 상환 필요 메소(`GetCurrentRepayment()`)만큼** 증가. `GetCurrentRepayment()`=상환 필요 메소 단일 진실값(미납 시 `PendingRepayment`, 아니면 `GetDebtAmount(DebtStage+1)` 미리보기) — HUD·재정·대출 공용 SSOT.)
-  - `PotentialService.mlua` — 잠재 판정(`RollPotential(allowDestroy, equipId, validForceChance)` → 등급+옵션 3줄. equipId/validForceChance는 증강 '대장장이의 눈'용). `PricingCalculator.mlua` — 판매가 산정(`Calculate(equipId, pr)` → `{destroyed, price, ...}`).
+  - `PotentialService.mlua` — 잠재 판정(`RollPotential(allowDestroy, equipId, validForceChance)` → 등급+옵션 3줄. equipId/validForceChance는 증강 '대장장이의 눈'용). `PricingCalculator.mlua` — 판매가 산정(`Calculate(equipId, pr)` → `{destroyed, price, ...}`) + **`GetOptionBonus(equipId, o)`(줄 1개의 판매가 보너스 순수함수 — Calculate와 스크래치 UI 실시간 상승이 공유하는 SSOT)**.
+  - **2단계 판매(판매 확정 → 수령하기)** @Sync: `IsSalePending`/`PendingSalePrice`/`PendingSaleItemId`. `RequestSellItem`은 검증 후 이 3개만 세팅(메소·아이템 불변). `RequestCollectSale`이 `Meso += PendingSalePrice` + 통계 갱신 + `ClearItem`. pending 중 `RequestUseCube`·`RequestSellItem` 거부, `IsSessionEnded()` 공용 가드. `ResetSession`이 pending 초기화. (스크래치 판매 결과 창은 아래 복권 긁기 UI 참조.)
   - `BlacksmithConfig.mlua` (`@Logic`) — 구현된 밸런스 상수의 SSOT. 시작메소/큐브비용/등급·옵션 확률/장비 5종/빚 상환표 + **증강 4종(`augments`)·대출(`loan`)·저축(`savings`)** 등 모든 수치는 이 파일에서만 조정한다(기획서 값을 옮긴 코드 측 SSOT).
   - **로비 허브 서버 로직(증강·재정·게임오버·재시작) — UI 없이 로직/API만** (`lobby_hub`·`blacksmith_upgrade`·`finance_management` 기획서). 세부:
     - **대장 기술(증강) — 골드 구매형(구현 완료)**: `ResetSession`에서 `RollAugmentChoices` 1회 롤(세션 시작부터 3택 상시 준비) → 로비 '대장 기술' 버튼 → `_AugmentManager:Open()` → `RequestSelectAugment(key)`가 **도달 단계 기준 비용 검증·차감**(`BlacksmithConfig.augmentCosts={7500,12500,20000}` → `GetAugmentCost(stage)`) + 중복 시 단계 상승(최대 3) + **구매 성공 시 `RollAugmentChoices` 재추첨**(§4-4 새로고침). 무료 3택 폐지(`RequestSettleDebt`의 `RollAugmentChoices` 호출 제거). 효과 배선(불변): 더좋은물품→`RollShop` 등급확률(`betterGoodsGradeProb`) / 대장장이의눈→`RollLine` 유효옵션(`smithEye` 10/20/45%) / 가격협상→`GetEffectiveBuyCost` 구매가(`priceNego` 10/18/40%) / 위험거래→판매가·`ComputeRepayment` 이자(`riskyDeal` 10/20/30%). 클라 가격 표시는 `GetSyncedAugmentStage`(AugmentsData 파싱)로 단계 읽어 `GetAugmentCost(stage+1)`. 증강 아이콘은 `d.augments.*.icon`(plain 스프라이트 RUID). UI는 아래 **대장 기술 업그레이드 UI** 항목 참조.
@@ -93,6 +94,10 @@
   클릭/드래그로 알파를 깎아 긁음(70% 도달 시 완료 이벤트). 격자해상도/브러시반경/강도/완료기준/대상맵은
   데이터테이블 `ScratchTicketConfig.userdataset`+`.csv`(`_DataService:GetTable`)로 구동, 없으면 인스펙터 기본값 폴백.
   (좌 시계·우 메소 상단 HUD는 아래 공용 HudManager 소관 — 스크래치 매니저에서 제거됨.)
+  - **실시간 판매가 상승(우측 `PriceWindow`)**: 큐브 사용 즉시 판매가 창을 **기본 판매가(`CurrentBasePrice`)부터** 표시(`ResetPriceDisplay`) → 줄 공개마다 그 줄의 서버 보너스(`SerializePotential` 8번째 필드 `bonus`=`GetOptionBonus`)만큼 `priceTarget` 상승 → 3줄 완료 시 **서버 최종가 `CurrentPrice`로 점프**(등급·이탈 배수·라운딩 반영, 클라 계산 신뢰 안 함). `UpdatePriceScroll`이 ease-out 카운트업. 직렬화 포맷은 `"cubeCount;grade;line×3"`, line = `label|value|unit|optionType|isBonus|isDestroy|isValid|bonus`.
+  - **공개 타입별 연출(`PlayRevealFX`)**: 잡옵/비유효=회색 델타·소폭 펀치·기본음 / 유효=노랑 플래시·펀치·성공음+코인 소량 / 이탈(`isValid&&isBonus`)=보라 플래시·큰 펀치·팡파레+코인 다량 / **파괴 줄=카운트업 정지(`priceFrozen`)+판매가 자리 "파괴" 빨강**(기존 파괴 시퀀스와 병행). 3줄 완료 최종 점프도 이탈 유무로 강조 차등.
+  - **동전 낙하 연출**: `CoinLayer`(루트 자식) + `Coin_1..20` 스프라이트 풀(코인 RUID `02a489cccff24a139a6c3582a5871f58`), `CrumbLayer` 패턴 복제. 유효/이탈/최종 점프 시 판매가 창 상단에서 pop-up 후 중력 낙하+회전(`SpawnCoins`/`UpdateCoins`), 짤랑음(`SfxCoin` `acb0f70275b7422dbcc8a395cbbd9d28`, 쿨다운). 상승 델타 "+n" 팝업은 `PriceWindow/PriceDelta`(`TextGUIRendererComponent`). 튜닝값 전부 인스펙터 property.
+  - **2단계 판매(판매 결과 창 `SaleResult`)**: 판매 버튼 → `RequestSellItem`(확정만, 버튼 비활성) → `IsSalePending` @Sync 에지 감지 → `ShowSaleResult`(무기 아이콘 `thumbnail://`+판매가+"수령하기" 버튼, 모달·긁기 차단) → `collectButton` → `RequestCollectSale`(메소 지급). 취소 없음. 아이템은 수령 전까지 유지되어 UI가 열린 채 있고, 수령 후 `CurrentItemId==""`로 게이팅이 UI를 닫아 상점 복귀(+정산 흐름은 수령 후 진행). `SaleResult`/`CoinLayer`는 `FixRenderOrder`의 `BringToFront`로 최상단 확정. (⚠ 신규 UIBuilder 텍스트=`TextGUIRendererComponent`. `ui/ScratchTicketGroup.ui`의 legacy `ConfirmSell`에 nested `UIGroupComponent`(lint L029)가 남아있어 UIBuilder write는 `strict:false` 필요 — 이번 작업이 만든 것 아님, 건드리지 말 것.)
 - **상단 HUD(로비/상점/스크래치 공용) — `RootDesk/MyDesk/Hud/HudManager.mlua`(`@Logic`, 클라) + `ui/HudGroup.ui`.**
   InGameMap에서 상시 표시(맵 게이팅: `CurrentMapName=="InGameMap"`으로 `hudRoot.Enable`). 값은 전부 서버 권위 `_GameManager` @Sync.
   - 좌상단 라디얼 시계('현재 시간') = `used = CubeUseCount % 5` → **n/5(올라가는 방식**, 상환 시점 5/5). `TimerFill.FillAmount`로 채움.

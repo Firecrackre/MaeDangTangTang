@@ -53,6 +53,13 @@ script GameManager extends Logic
     @Sync property integer TotalSellCount = 0   -- 판매 성공 누적 횟수
     @Sync property integer MaxSellPrice = 0     -- 한 번에 가장 비싸게 판 금액
 
+    -- ── 2단계 판매(판매 확정 → 수령하기) (cube_scratch_system §11) ──
+    --   판매 버튼 → RequestSellItem: 즉시 지급하지 않고 IsSalePending으로 전환(아이템/잠재 유지).
+    --   판매 결과 창의 '수령하기' → RequestCollectSale: 이때 메소 지급 + 아이템 정리.
+    @Sync property boolean IsSalePending = false   -- 판매 확정 후 수령 대기 여부
+    @Sync property integer PendingSalePrice = 0    -- 수령 대기 금액(확정 판매가)
+    @Sync property string PendingSaleItemId = ""   -- 결과 창 무기 아이콘용(판매된 장비 id)
+
     -- ── 일차(A안): 별도 시간 시스템 없이 DebtStage로 표시. 일차 = DebtStage + 1 ──
     --   (@Sync 불필요 — 클라가 DebtStage로 직접 계산. 서버 헤더 주석으로만 규약 고정.)
 
@@ -116,6 +123,10 @@ script GameManager extends Logic
         self.LoanUseCount = 0
         self.Debt = 0
         self.CanLoan = false
+        -- 2단계 판매 대기 상태 리셋(재시작 안전)
+        self.IsSalePending = false
+        self.PendingSalePrice = 0
+        self.PendingSaleItemId = ""
         -- 로비 상태 리셋 (Phase 5)
         self.CurrentActivity = "lobby"
         self:UpdateRepaymentCountdown()  -- 시작 시 '다음 상환까지 남은 큐브' 표시 (flow §5-4)
@@ -284,6 +295,11 @@ script GameManager extends Logic
             log_warning("[GameManager] cube rejected: item destroyed (confirm first)")
             return
         end
+        -- 판매 확정(수령 대기) 상태면 큐브 재사용 불가 — 먼저 수령해야 한다. (2단계 판매)
+        if self.IsSalePending then
+            log_warning("[GameManager] cube rejected: sale pending (collect first)")
+            return
+        end
 
         local d = _BlacksmithConfig:GetData()
         -- 큐브 종류 해석(클라 입력 불신 → 서버가 config에서 비용/파괴여부 확정). 알 수 없으면 weird 폴백.
@@ -384,7 +400,8 @@ script GameManager extends Logic
 
     @ExecSpace("Server")
     method void RequestSellItem()
-        -- 판매: 현재 예상 판매가만큼 메소 획득 → 아이템/잠재 상태 정리 → 아이템 선택 상태로. (flow §12)
+        -- 판매 확정(1단계): 즉시 지급하지 않고 '수령 대기(IsSalePending)'로 전환한다. (cube_scratch_system §11, 2단계 판매)
+        --   실제 메소 지급·아이템 정리는 판매 결과 창의 '수령하기'(RequestCollectSale)에서 처리한다.
         if self:IsSessionEnded() then
             log_warning("[GameManager] sell rejected: session ended")
             return
@@ -404,17 +421,44 @@ script GameManager extends Logic
             log_warning("[GameManager] sell rejected: no cube used (potential required)")
             return
         end
-        -- 판매가는 서버가 권위 결정한 예상 판매가(CurrentPrice).
-        local gain = self.CurrentPrice
-        local soldId = self.CurrentItemId
+        -- 이미 수령 대기 중이면 중복 요청 무시.
+        if self.IsSalePending then
+            log_warning("[GameManager] sell rejected: already pending collect")
+            return
+        end
+        -- 수령 대기 상태로 전환(아이템/잠재 상태는 유지 → 결과 창 표시 + 수령 흐름). (2단계 판매)
+        self.IsSalePending = true
+        self.PendingSalePrice = self.CurrentPrice
+        self.PendingSaleItemId = self.CurrentItemId
+        log("[GameManager] sale pending '" .. self.CurrentItemId .. "' price="
+            .. tostring(self.PendingSalePrice) .. " (awaiting collect)")
+    end
+
+    @ExecSpace("Server")
+    method void RequestCollectSale()
+        -- 판매 수령(2단계): 수령 대기 금액을 지급하고 아이템/잠재 상태를 정리한다. (cube_scratch_system §11)
+        if self:IsSessionEnded() then
+            log_warning("[GameManager] collect rejected: session ended")
+            return
+        end
+        if not self.IsSalePending then
+            log_warning("[GameManager] collect rejected: no pending sale")
+            return
+        end
+        local gain = self.PendingSalePrice
+        local soldId = self.PendingSaleItemId
         self.Meso = self.Meso + gain
         -- 판매 통계 갱신(게임오버 기록용, Phase 1).
         self.TotalSellCount = self.TotalSellCount + 1
         if gain > self.MaxSellPrice then self.MaxSellPrice = gain end
+        -- 수령 대기 상태 해제 후 아이템 정리(순서 무관하나 pending 먼저 내려야 클라 에지 감지가 깔끔).
+        self.IsSalePending = false
+        self.PendingSalePrice = 0
+        self.PendingSaleItemId = ""
         self:ClearItem()
         self:UpdateCanLoan()
-        log("[GameManager] sold '" .. soldId .. "' (+" .. tostring(gain)
-            .. "), potential=" .. tostring(self.HasPotential) .. ", meso=" .. tostring(self.Meso)
+        log("[GameManager] collected sale '" .. soldId .. "' (+" .. tostring(gain)
+            .. "), meso=" .. tostring(self.Meso)
             .. ", totalSells=" .. tostring(self.TotalSellCount) .. ", maxPrice=" .. tostring(self.MaxSellPrice))
         -- 스턱(weapon) 판정은 상점 화면 표시 시점(RequestShopStuckCheck)으로 연기.
     end
@@ -462,19 +506,22 @@ script GameManager extends Logic
     @ExecSpace("ServerOnly")
     method string SerializePotential(any pr)
         -- 잠재 결과(등급+옵션 3줄)를 @Sync 문자열로 직렬화한다(클라 스크래치 UI가 파싱해 표시).
-        --   포맷: "cubeCount;grade;line;line;line", line = "label|value|unit|optionType|isBonus|isDestroy|isValid".
+        --   포맷: "cubeCount;grade;line;line;line", line = "label|value|unit|optionType|isBonus|isDestroy|isValid|bonus".
         --   맨 앞 cubeCount는 매 큐브 사용마다 값이 달라지게 해 클라가 동일 결과 재추첨도 변화로 감지하게 한다.
         --   isValid는 주요 옵션의 장비 유효성(서버 판정). 비주요(잡옵/파괴)는 0.
+        --   bonus는 이 줄이 판매가에 더하는 옵션 보너스(서버 권위, GetOptionBonus). 클라는 이 값으로 실시간 판매가를 올린다.
         local parts = { tostring(self.CubeUseCount), pr.grade }
         for _, o in ipairs(pr.options) do
             local isValid = 0
             if o.optionType == "Main" and _BlacksmithConfig:IsValidMain(self.CurrentItemId, o.optionName) then
                 isValid = 1
             end
+            local bonus = _PricingCalculator:GetOptionBonus(self.CurrentItemId, o)
             local line = o.label .. "|" .. tostring(o.value) .. "|" .. o.unit .. "|" .. o.optionType
                 .. "|" .. (o.isBonusValue and "1" or "0")
                 .. "|" .. (o.isDestroy and "1" or "0")
                 .. "|" .. tostring(isValid)
+                .. "|" .. tostring(bonus)
             table.insert(parts, line)
         end
         return table.concat(parts, ";")

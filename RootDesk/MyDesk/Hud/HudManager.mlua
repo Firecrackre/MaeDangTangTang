@@ -22,6 +22,7 @@ script HudManager extends Logic
     property Entity debtBox = "1a39278a-8f91-428c-9e34-29c2e3d894d7"          -- '현재 빚' 박스 루트(Debt>0일 때만 Enable)
     property TextComponent debtText = "995dab86-fb01-4934-944e-e9097a5ec5cd" -- '현재 빚' 텍스트
     property Entity loanPopup = "682736f8-1354-45f4-af4b-07f011f9a94d"        -- '대출하러 가기!' 슬라이드 팝업(버튼+CanvasGroup)
+    property Entity dim = "f783a592-c225-4516-986c-ecc3ff1e32b4"                              -- 전면 딤(모달 배경). CTA 활성 시만 Enable. UUID는 UIBuilder write({bind}) 주입.
 
     -- 내부 상태.
     property integer maxCubes = 5
@@ -41,6 +42,11 @@ script HudManager extends Logic
     property any loanPopupHandler = nil
     -- 게임오버(weapon/cube) 사슬 연출 동안 팝업 강제 표시(GameOverManager:SetForceLoanPopup).
     property boolean forceLoanPopup = false
+    -- 딤(모달) 상태: CTA 활성 동안 화면을 어둡게 한다.
+    --   HudGroup은 .ui에서 GroupOrder=4 정적 고정(상점3/스크래치1/로비2 위, 재정5 아래) — 런타임 변경은
+    --   MSW에서 렌더 재정렬이 안 되므로 쓰지 않는다. 여기서는 전면 딤의 Enable만 토글한다.
+    --   dimActive는 변화 시에만 Enable을 쓰기 위한 캐시(매 프레임 write 방지).
+    property boolean dimActive = false
 
     @ExecSpace("ClientOnly")
     method void OnBeginPlay()
@@ -66,6 +72,16 @@ script HudManager extends Logic
             end
         end
         if isvalid(self.debtBox) then self.debtBox.Enable = false end
+
+        -- 딤 초기화: 숨김 + 루트 최하단 형제로 밀어 Hud/RoundTimer 아래에 렌더(HUD는 밝게 유지).
+        --   HudGroup 자체는 .ui에서 GroupOrder=4 정적 → 딤이 켜지면 상점/스크래치/로비를 덮는다.
+        self.dimActive = false
+        if isvalid(self.dim) then
+            self.dim.Enable = false
+            if isvalid(self.dim.UITransformComponent) then
+                _UILogic:SetSiblingIndex(self.dim.UITransformComponent, 0)
+            end
+        end
         log("[HudManager] ready. maxCubes=" .. tostring(self.maxCubes))
     end
 
@@ -253,6 +269,21 @@ script HudManager extends Logic
             self.loanPopupActive = false
             self.loanPopup.Enable = false
         end
+
+        -- 딤(모달) 구동: 팝업이 유효 노출 중(등장~체류~퇴장 슬라이드)이면 화면을 어둡게 + HudGroup을
+        --   상점/스크래치 위로 상승시켜 그 아래를 덮고 클릭을 차단한다. 게임오버 사슬 연출과는 분리(IsGameOver 게이팅).
+        self:UpdateDim(shown or self.loanPopupActive)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateDim(boolean present)
+        -- present=팝업이 화면에 유효 노출 중인가. 게임오버(사슬/자물쇠 연출)는 자체 딤을 쓰므로 여기선 개입 안 함.
+        local dimOn = present and (not _GameManager.IsGameOver)
+        if dimOn == self.dimActive then return end   -- 변화 없을 때 매 프레임 write 방지
+        self.dimActive = dimOn
+        -- 전면 딤 토글만 담당. HudGroup(정적 GroupOrder=4)이 이미 상점/스크래치/로비 위라, 딤(최하단 형제)이
+        --   켜지면 그 콘텐츠를 덮고 raycast로 클릭을 흡수한다. HUD 박스/시계/팝업은 딤 위(밝게) 유지.
+        if isvalid(self.dim) then self.dim.Enable = dimOn end
     end
 
     @ExecSpace("ClientOnly")

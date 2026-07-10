@@ -50,6 +50,18 @@ script ScratchTicketManager extends Component
     property Entity priceWindow = "626f0e14-b1d2-455c-96b4-9f60e373e960"
     property TextComponent priceText = "18c964d8-d113-4dc4-84a4-308589167166"
 
+    -- 실시간 판매가 상승 연출용(신규 UIBuilder → TextGUIRendererComponent). UUID는 UIBuilder가 주입.
+    property TextGUIRendererComponent priceDelta = "b8cdf5d2-f5a6-4014-9c84-f3116f5d4c97"   -- "+15,000" 상승 델타 팝업
+
+    -- 코인 낙하 풀(특별 수치 연출). CrumbLayer 패턴. UUID는 UIBuilder가 주입.
+    property Entity coinLayer = "721cd088-6a34-4312-87e6-86af26b4ad8b"
+
+    -- 판매 결과 창(수령하기) — 판매 확정 → 무기 아이콘+판매가 표시 → 수령. UUID는 UIBuilder가 주입.
+    property Entity saleResultGroup = "d0722bc8-8d08-41a3-8ec8-e15a2073f457"
+    property Entity saleWeaponIcon = "1fdbda69-49f4-4637-98fe-4c8c927366b0"
+    property TextGUIRendererComponent saleSoldText = "56ebc2fd-edd4-405e-8ad0-39ac5cc398ec"
+    property Entity collectButton = "72cd7dfb-f8a0-4f8d-b03b-f14b71c8f499"
+
     -- 큐브 미사용 판매 확인 팝업 (UUID는 UIBuilder가 주입)
     property Entity confirmSellGroup = "4b0df76c-0733-4acc-9ebf-475ef86dd4d8"
     property TextComponent confirmMsgText = "8ecefcb6-39bc-4c16-9969-f40543a69141"
@@ -61,6 +73,38 @@ script ScratchTicketManager extends Component
     property number CrumbGravity = 1600
     property number CrumbFloorY = -540
     property number CrumbSize = 10
+
+    -- ===== 실시간 판매가 카운트업 / 연출 튜닝 (인스펙터 SSOT) =====
+    property number PriceScrollTime = 0.55      -- 판매가 숫자가 목표까지 올라가는 시간(초, ease-out)
+    property number PricePunchScale = 1.22      -- 유효/이탈 공개 시 판매가창 펀치 최대 배율
+    property number PricePunchTime = 0.35       -- 펀치 지속(초)
+    property number PriceFlashTime = 0.5        -- 플래시 지속(초)
+    property number DeltaRiseTime = 0.9         -- "+n" 델타 팝업 상승·페이드 시간(초)
+    property number DeltaRiseDist = 46          -- 델타 팝업이 떠오르는 거리(px)
+
+    -- ===== 옵션 라벨 공개 tweening 튜닝 (인스펙터 SSOT) =====
+    property number LabelPunchTime = 0.45       -- 라벨 팝 지속(초)
+    property number LabelPunchJunk = 1.10       -- 잡옵/비유효 팝 최대 배율
+    property number LabelPunchValid = 1.35      -- 유효 팝 최대 배율
+    property number LabelPunchBonus = 1.55      -- 이탈 팝 최대 배율
+    property number LabelWobbleDeg = 8          -- 이탈 팝 시 Z회전 흔들림 최대 각(도)
+    property number LabelShakeAmp = 6           -- 파괴 라벨 X 흔들림 진폭(px)
+
+    -- ===== 코인 낙하 연출 튜닝 =====
+    property integer CoinGravity = 1500
+    property number CoinFloorY = -560
+    property integer CoinSizeW = 36
+    property integer CoinSizeH = 31
+    property number CoinSfxCooldown = 0.12      -- 코인 짤랑음 연속 재생 최소 간격(초)
+    property integer CoinCountValid = 6         -- 유효 옵션 공개 시 방출 코인 수
+    property integer CoinCountBonus = 12        -- 이탈 옵션 공개 시 방출 코인 수
+    property integer CoinCountFinal = 20        -- 3줄 완료(대박) 시 방출 코인 수
+
+    -- ===== 효과음 RUID (WeaponShopManager 재사용 + msw-search 코인음) =====
+    property string SfxClick = "972843e759204d3e9ad84e7d3fa94f83"  -- 잡옵/기본 공개음
+    property string SfxValid = "b060035abee84543bdd77c69dc7aeab3"  -- 유효 옵션 성공음
+    property string SfxBonus = "cb270655c69841aabb02b11de9f8a8be"  -- 이탈/대박 팡파레
+    property string SfxCoin = "acb0f70275b7422dbcc8a395cbbd9d28"   -- 코인 짤랑음(동전 낙하)
 
     -- ===== Runtime state =====
     property any tickets = nil
@@ -93,6 +137,30 @@ script ScratchTicketManager extends Component
     property any clickRecords = nil      -- {entity, eventHandler} list for cube/buy/reuse/sell buttons
     property any enterRecords = nil      -- hover enter/exit handler records
 
+    -- ===== 실시간 판매가 / 코인 / 판매결과 런타임 상태 =====
+    property number displayedPrice = 0   -- 화면에 현재 표시 중인 판매가(카운트업 중간값)
+    property number priceStart = 0       -- 카운트업 시작값
+    property integer priceTarget = 0     -- 카운트업 목표값
+    property number priceScrollT = -1    -- 카운트업 경과(-1=비활성)
+    property boolean priceFrozen = false -- 파괴 시 카운트업 정지
+    property integer revealedBonusSum = 0 -- 공개된 줄의 옵션 보너스 누적(기본가 위에 더함)
+
+    property number priceFlashT = -1     -- 판매가 텍스트 플래시 경과
+    property any priceFlashColor = nil   -- 플래시 색
+    property number pricePunchT = -1     -- 판매가창 펀치 경과
+    property number pricePunchPeak = 1.0 -- 이번 펀치 최대 배율
+
+    property number deltaT = -1          -- 델타 팝업 경과
+    property number deltaBaseY = 30      -- 델타 팝업 시작 y(런타임 계산)
+
+    property any coins = nil             -- 코인 낙하 풀
+    property integer coinCursor = 0
+    property number coinSfxCd = 0        -- 코인음 쿨다운 타이머
+
+    property boolean saleShown = false   -- 판매 결과 창 표시 상태(IsSalePending 에지 감지)
+
+    property any labelFX = nil           -- 인덱스 1~3 옵션 라벨 공개 팝 상태 {t,peak,wobble,shake}
+
     @ExecSpace("ClientOnly")
     method void OnBeginPlay()
         -- 큐브 스크래치 UI 초기화: 설정 로드 → foil/크럼 구성 → 입력/버튼/호버 연결 → 대기 상태로 숨김.
@@ -103,11 +171,13 @@ script ScratchTicketManager extends Component
         self:RegisterTicket(2, self.foil2)
         self:RegisterTicket(3, self.foil3)
         self:BuildCrumbPool()
+        self:BuildCoinPool()
 
         self.clickRecords = {}
         self.enterRecords = {}
         self.optionLines = {}
         self.rainbowLines = {}
+        self:InitLabelFX()
 
         -- 스크린 터치(긁기)
         self.touchHandler = _InputService:ConnectEvent(ScreenTouchEvent, self.OnTouchBegin)
@@ -120,6 +190,7 @@ script ScratchTicketManager extends Component
         self:WireClick(self.masterBuyButton, self.OnUseMaster)
         self:WireClick(self.reuseButton, self.OnReuseClicked)
         self:WireClick(self.sellButton, self.OnSellClicked)
+        self:WireClick(self.collectButton, self.OnCollectClicked)
         self:WireClick(self.confirmYesButton, self.OnConfirmSellYes)
         self:WireClick(self.confirmNoButton, self.OnConfirmSellNo)
 
@@ -138,9 +209,17 @@ script ScratchTicketManager extends Component
         self:FixRenderOrder()
 
         -- 시작은 숨김(맵 게이팅 gotcha 회피: 명시적으로 끈다).
+        -- 델타 팝업 시작 y 캡처(있으면).
+        if isvalid(self.priceDelta) and isvalid(self.priceDelta.Entity)
+            and isvalid(self.priceDelta.Entity.UITransformComponent) then
+            self.deltaBaseY = self.priceDelta.Entity.UITransformComponent.anchoredPosition.y
+        end
+
         self.isActive = false
         self.lastPotentialData = "\0"
+        self.saleShown = false
         self:HideConfirmSell()
+        self:HideSaleResult()
         self:SetContainersActive(false)
         self:ResetToWaiting()
         log("[ScratchTicket] OnBeginPlay map=" .. self.TargetMapName .. " grid=" .. self.GridWidth .. "x" .. self.GridHeight)
@@ -262,12 +341,20 @@ script ScratchTicketManager extends Component
                 _UILogic:SetSiblingIndex(bg.UITransformComponent, 0)
             end
         end
-        if isvalid(self.crumbLayer) and isvalid(self.crumbLayer.UITransformComponent) then
-            local parent = self.crumbLayer.Parent
-            if isvalid(parent) then
-                local n = #parent.Children:ToTable()
-                _UILogic:SetSiblingIndex(self.crumbLayer.UITransformComponent, n - 1)
-            end
+        -- 앞으로 끌어올 순서: 부스러기 → 코인 → 판매결과 창(마지막 호출이 가장 앞).
+        self:BringToFront(self.crumbLayer)
+        self:BringToFront(self.coinLayer)
+        self:BringToFront(self.saleResultGroup)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void BringToFront(Entity e)
+        -- 루트 형제 중 가장 뒤(배열 마지막 = 가장 나중에 그림 = 최상단)로 옮긴다.
+        if not isvalid(e) or not isvalid(e.UITransformComponent) then return end
+        local parent = e.Parent
+        if isvalid(parent) then
+            local n = #parent.Children:ToTable()
+            _UILogic:SetSiblingIndex(e.UITransformComponent, n - 1)
         end
     end
 
@@ -310,10 +397,21 @@ script ScratchTicketManager extends Component
             end
         end
 
+        -- 판매 확정(수령 대기) 에지 감지 → 판매 결과 창 표시/숨김.
+        if _GameManager.IsSalePending and not self.saleShown then
+            self:ShowSaleResult()
+        elseif not _GameManager.IsSalePending and self.saleShown then
+            self:HideSaleResult()
+        end
+
         self:UpdateHoverFX(delta)
         self:UpdateRainbow(delta)
+        self:UpdateLabelFX(delta)
         self:UpdateDestroy(delta)
         self:UpdateCrumbs(delta)
+        self:UpdatePriceScroll(delta)
+        self:UpdatePriceFX(delta)
+        self:UpdateCoins(delta)
     end
 
     @ExecSpace("ClientOnly")
@@ -323,6 +421,8 @@ script ScratchTicketManager extends Component
         if isvalid(self.cubeSelect) then self.cubeSelect.Enable = on end
         if not on and isvalid(self.priceWindow) then self.priceWindow.Enable = false end
         if not on then self:HideConfirmSell() end
+        if not on then self:HideSaleResult() end
+        if not on then self:StopCoins() end
         if not on then self.scratchReady = false end   -- 맵 이탈/아이템 없음 → 긁기 차단.
     end
 
@@ -339,8 +439,19 @@ script ScratchTicketManager extends Component
         self:SetButtonEnabled(self.sellButton, false)
         self.revealedCount = 0
         self.rainbowLines = {}
+        self:InitLabelFX()
         self.destroyPending = false
         self.scratchReady = false   -- 대기 상태에서는 긁기 차단(큐브 사용 전 부스러기 방지).
+        -- 판매가 카운트업/델타 상태 초기화(창은 숨김 유지).
+        self.revealedBonusSum = 0
+        self.priceScrollT = -1
+        self.priceFrozen = false
+        self.priceFlashT = -1
+        self.pricePunchT = -1
+        self.deltaT = -1
+        if isvalid(self.priceDelta) and isvalid(self.priceDelta.Entity) then
+            self.priceDelta.Entity.Enable = false
+        end
     end
 
     @ExecSpace("ClientOnly")
@@ -361,6 +472,8 @@ script ScratchTicketManager extends Component
                 isBonus = (parts[5] == "1"),
                 isDestroy = (parts[6] == "1"),
                 isValid = (parts[7] == "1"),
+                bonus = tonumber(parts[8]) or 0,   -- 서버 권위 줄별 판매가 보너스(실시간 상승분)
+                revealed = false,
             }
         end
 
@@ -378,12 +491,15 @@ script ScratchTicketManager extends Component
         for i = 1, 3 do
             local o = self.optionLines[i]
             if isvalid(rows[i]) then rows[i].Enable = true end
-            -- 옵션 텍스트(은박 아래). 초기 글자색 흰색, 위치 0.
+            -- 옵션 텍스트(은박 아래). 초기 글자색 흰색, 위치/스케일/회전 원복.
             if isvalid(labels[i]) then
                 labels[i].Text = self:FormatOption(o)
                 labels[i].FontColor = Color(1, 1, 1, 1)
                 if isvalid(labels[i].Entity) and isvalid(labels[i].Entity.UITransformComponent) then
-                    labels[i].Entity.UITransformComponent.anchoredPosition = Vector2(0, 0)
+                    local lui = labels[i].Entity.UITransformComponent
+                    lui.anchoredPosition = Vector2(0, 0)
+                    lui.UIScale = Vector3(1, 1, 1)
+                    lui.UIRotation = Vector3(0, 0, 0)
                 end
             end
             -- 바탕색: 처음엔 회색(공개 전). 공개 시 종류색으로 전환.
@@ -396,12 +512,17 @@ script ScratchTicketManager extends Component
 
         self.revealedCount = 0
         self.rainbowLines = {}
+        self:InitLabelFX()
         self.destroyPending = false
-        if isvalid(self.priceWindow) then self.priceWindow.Enable = false end
+        -- 판매가 창을 큐브 사용 즉시 '기본 판매가'부터 표시(줄 공개마다 실시간 상승). (pricing §14)
+        self.revealedBonusSum = 0
+        self.priceFrozen = false
+        self:ResetPriceDisplay(_GameManager.CurrentBasePrice)
         self:SetButtonEnabled(self.reuseButton, false)
         self:SetButtonEnabled(self.sellButton, false)
         self.scratchReady = true   -- 은박 3줄 표시 완료 → 이제부터 긁기 허용.
-        log("[ScratchTicket] setup scratch: grade=" .. (fields[2] or "?") .. " cube=" .. self.lastCubeType)
+        log("[ScratchTicket] setup scratch: grade=" .. (fields[2] or "?") .. " cube=" .. self.lastCubeType
+            .. " base=" .. tostring(_GameManager.CurrentBasePrice))
     end
 
     @ExecSpace("ClientOnly")
@@ -444,6 +565,220 @@ script ScratchTicketManager extends Component
                     rec.ui.anchoredPosition = Vector2(nx, ny)
                 end
             end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ResetPriceDisplay(integer base)
+        -- 판매가 창을 base(기본 판매가)로 즉시 표시(카운트업 없이). 큐브 사용 직후 호출.
+        if isvalid(self.priceWindow) then self.priceWindow.Enable = true end
+        self.displayedPrice = base
+        self.priceStart = base
+        self.priceTarget = base
+        self.priceScrollT = -1
+        if isvalid(self.priceText) then
+            self.priceText.Text = self:Comma(base) .. " 메소"
+            self.priceText.FontColor = Color(1, 1, 1, 1)
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StartPriceScroll(integer target)
+        -- 현재 표시값에서 target까지 ease-out 카운트업 시작(파괴 정지 상태면 무시).
+        if self.priceFrozen then return end
+        self.priceStart = self.displayedPrice
+        self.priceTarget = target
+        self.priceScrollT = 0
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdatePriceScroll(number delta)
+        -- 판매가 숫자를 목표까지 ease-out으로 카운트업한다.
+        if self.priceScrollT < 0 then return end
+        if self.priceFrozen then self.priceScrollT = -1 return end
+        self.priceScrollT = self.priceScrollT + delta
+        local dur = self.PriceScrollTime
+        local t = 1.0
+        if dur > 0 then t = self.priceScrollT / dur end
+        if t > 1.0 then t = 1.0 end
+        local ease = 1 - (1 - t) * (1 - t)   -- ease-out quad
+        local cur = self.priceStart + (self.priceTarget - self.priceStart) * ease
+        self.displayedPrice = cur
+        if isvalid(self.priceText) then
+            self.priceText.Text = self:Comma(math.floor(cur + 0.5)) .. " 메소"
+        end
+        if t >= 1.0 then
+            self.displayedPrice = self.priceTarget
+            self.priceScrollT = -1
+            if isvalid(self.priceText) then
+                self.priceText.Text = self:Comma(self.priceTarget) .. " 메소"
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void FlashPrice(any color, number punchScale)
+        -- 판매가 텍스트 플래시 + 판매가창 펀치 트리거.
+        self.priceFlashT = 0
+        self.priceFlashColor = color
+        self.pricePunchT = 0
+        self.pricePunchPeak = punchScale
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ShowDelta(integer amount, any color)
+        -- 상승분 "+n" 델타 팝업을 판매가 창 위에 띄운다(UpdatePriceFX가 상승·페이드).
+        if not isvalid(self.priceDelta) or not isvalid(self.priceDelta.Entity) then return end
+        self.priceDelta.Text = "+" .. self:Comma(amount)
+        self.priceDelta.FontColor = Color(color.r, color.g, color.b, 1)
+        local ui = self.priceDelta.Entity.UITransformComponent
+        if isvalid(ui) then ui.anchoredPosition = Vector2(0, self.deltaBaseY) end
+        self.priceDelta.Entity.Enable = true
+        self.deltaT = 0
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdatePriceFX(number delta)
+        -- 판매가 텍스트 플래시 색 복귀 + 판매가창 펀치 스케일 + 델타 팝업 상승/페이드.
+        if self.priceFlashT >= 0 and not self.priceFrozen then
+            self.priceFlashT = self.priceFlashT + delta
+            local dur = self.PriceFlashTime
+            local k = 1.0
+            if dur > 0 then k = self.priceFlashT / dur end
+            if k >= 1.0 then
+                self.priceFlashT = -1
+                if isvalid(self.priceText) then self.priceText.FontColor = Color(1, 1, 1, 1) end
+            elseif isvalid(self.priceText) and self.priceFlashColor ~= nil then
+                local c = self.priceFlashColor
+                local w = k  -- 0=지정색, 1=흰색
+                self.priceText.FontColor = Color(c.r + (1 - c.r) * w, c.g + (1 - c.g) * w, c.b + (1 - c.b) * w, 1)
+            end
+        end
+        if self.pricePunchT >= 0 then
+            self.pricePunchT = self.pricePunchT + delta
+            local dur = self.PricePunchTime
+            local k = 1.0
+            if dur > 0 then k = self.pricePunchT / dur end
+            local ui = nil
+            if isvalid(self.priceWindow) then ui = self.priceWindow.UITransformComponent end
+            if k >= 1.0 then
+                self.pricePunchT = -1
+                if isvalid(ui) then ui.UIScale = Vector3(1, 1, 1) end
+            elseif isvalid(ui) then
+                local s = 1 + (self.pricePunchPeak - 1) * math.sin(k * math.pi)
+                ui.UIScale = Vector3(s, s, 1)
+            end
+        end
+        if self.deltaT >= 0 and isvalid(self.priceDelta) and isvalid(self.priceDelta.Entity) then
+            self.deltaT = self.deltaT + delta
+            local dur = self.DeltaRiseTime
+            local k = 1.0
+            if dur > 0 then k = self.deltaT / dur end
+            if k >= 1.0 then
+                self.deltaT = -1
+                self.priceDelta.Entity.Enable = false
+            else
+                local ui = self.priceDelta.Entity.UITransformComponent
+                if isvalid(ui) then ui.anchoredPosition = Vector2(0, self.deltaBaseY + self.DeltaRiseDist * k) end
+                local fc = self.priceDelta.FontColor
+                self.priceDelta.FontColor = Color(fc.r, fc.g, fc.b, 1 - k)
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void BuildCoinPool()
+        -- CoinLayer 아래 미리 만든 코인 스프라이트들을 풀로 수집(전부 비활성 시작).
+        self.coins = {}
+        self.coinCursor = 0
+        self.coinSfxCd = 0
+        if not isvalid(self.coinLayer) then return end
+        for _, c in ipairs(self.coinLayer.Children:ToTable()) do
+            c.Enable = false
+            if isvalid(c.UITransformComponent) then
+                c.UITransformComponent.RectSize = Vector2(self.CoinSizeW, self.CoinSizeH)
+            end
+            table.insert(self.coins, { entity = c, ui = c.UITransformComponent, vx = 0, vy = 0, spin = 0, active = false })
+        end
+        log("[ScratchTicket] coin pool built: " .. tostring(#self.coins))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SpawnCoins(integer count, boolean strong)
+        -- 판매가 창 상단에서 코인을 pop-up 후 후두둑 낙하시킨다(+짤랑음, 쿨다운).
+        if self.coins == nil or #self.coins == 0 then return end
+        if not isvalid(self.coinLayer) or not isvalid(self.priceWindow) then return end
+        local originX, originY = 0, 0
+        if isvalid(self.priceWindow.UITransformComponent) then
+            local p = self.priceWindow.UITransformComponent.anchoredPosition
+            originX = p.x
+            originY = p.y + 120
+        end
+        local n = #self.coins
+        local spawned = 0
+        local spread = strong and 240 or 140
+        local pop = strong and 300 or 180
+        for step = 1, n do
+            if spawned >= count then break end
+            self.coinCursor = (self.coinCursor % n) + 1
+            local rec = self.coins[self.coinCursor]
+            if not rec.active then
+                rec.ui.anchoredPosition = Vector2(originX + (_UtilLogic:RandomDouble() - 0.5) * 90,
+                    originY + (_UtilLogic:RandomDouble() - 0.5) * 30)
+                rec.vx = (_UtilLogic:RandomDouble() - 0.5) * spread
+                rec.vy = pop + _UtilLogic:RandomDouble() * 160
+                rec.spin = (_UtilLogic:RandomDouble() - 0.5) * 720
+                rec.active = true
+                rec.entity.Enable = true
+                spawned = spawned + 1
+            end
+        end
+        if spawned > 0 then self:PlayCoinSfx() end
+        log("[ScratchTicket] coins spawned: " .. tostring(spawned) .. " (strong=" .. tostring(strong) .. ")")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void PlayCoinSfx()
+        -- 코인 짤랑음 재생(연속 방출 시 쿨다운으로 중복 제한).
+        if self.coinSfxCd > 0 then return end
+        _SoundService:PlaySound(self.SfxCoin, 1)
+        self.coinSfxCd = self.CoinSfxCooldown
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateCoins(number delta)
+        -- 활성 코인을 중력으로 낙하 + 회전시키고 바닥 도달 시 회수.
+        if self.coinSfxCd > 0 then self.coinSfxCd = self.coinSfxCd - delta end
+        if self.coins == nil then return end
+        for i = 1, #self.coins do
+            local rec = self.coins[i]
+            if rec.active then
+                rec.vy = rec.vy - self.CoinGravity * delta
+                local pos = rec.ui.anchoredPosition
+                local nx = pos.x + rec.vx * delta
+                local ny = pos.y + rec.vy * delta
+                if ny <= self.CoinFloorY then
+                    rec.active = false
+                    rec.entity.Enable = false
+                else
+                    rec.ui.anchoredPosition = Vector2(nx, ny)
+                    if isvalid(rec.ui) then
+                        local rot = rec.ui.UIRotation
+                        rec.ui.UIRotation = Vector3(0, 0, rot.z + rec.spin * delta)
+                    end
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StopCoins()
+        -- 모든 코인 회수(맵 이탈/아이템 없음 시).
+        if self.coins == nil then return end
+        for i = 1, #self.coins do
+            local rec = self.coins[i]
+            rec.active = false
+            if isvalid(rec.entity) then rec.entity.Enable = false end
         end
     end
 
@@ -562,6 +897,35 @@ script ScratchTicketManager extends Component
         end
         self.revealedCount = self.revealedCount + 1
         log("[ScratchTicket] line " .. index .. " revealed (" .. self.revealedCount .. "/3)")
+
+        -- 실시간 판매가: 공개된 줄의 옵션 보너스만큼 목표가 상승 + 타입별 차별 연출. (pricing §14)
+        if o ~= nil then
+            if o.isDestroy then
+                -- 파괴: 카운트업 정지 + 판매가 자리에 "파괴" 빨강.
+                self.priceFrozen = true
+                self.priceScrollT = -1
+                if isvalid(self.priceText) then
+                    self.priceText.Text = "파괴"
+                    self.priceText.FontColor = Color(0.95, 0.25, 0.22, 1.0)
+                end
+                -- 파괴 줄 글자도 빨강 + 흔들림으로 강조(무지개 대상 아님 → 위치 충돌 없음).
+                local pl = { self.label1, self.label2, self.label3 }
+                if isvalid(pl[index]) then pl[index].FontColor = Color(0.95, 0.25, 0.22, 1.0) end
+                self:StartLabelFX(index, 1.2, 0, true)
+                _SoundService:PlaySound(self.SfxClick, 1)
+                log("[ScratchTicket] price FROZEN (destroy line)")
+            else
+                o.revealed = true
+                self.revealedBonusSum = self.revealedBonusSum + o.bonus
+                self:StartPriceScroll(_GameManager.CurrentBasePrice + self.revealedBonusSum)
+                self:PlayRevealFX(o)
+                self:StartLabelReveal(index, o)
+                log("[ScratchTicket] price target=" .. tostring(_GameManager.CurrentBasePrice + self.revealedBonusSum)
+                    .. " (+" .. tostring(o.bonus) .. ", valid=" .. tostring(o.isValid)
+                    .. ", bonus=" .. tostring(o.isBonus) .. ")")
+            end
+        end
+
         if o ~= nil and o.isDestroy then
             -- 파괴 줄 공개 즉시: 나머지 줄을 기다리지 않고 바로 흔들림 연출 → 메인메뉴 복귀. (cube_scratch_system §9)
             self:StartDestroySequence()
@@ -569,6 +933,29 @@ script ScratchTicketManager extends Component
         end
         if self.revealedCount >= 3 then
             self:OnAllRevealed()
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void PlayRevealFX(any o)
+        -- 공개 결과별 판매가 상승 연출(잡옵/유효/이탈 차별화) + 델타 팝업 + 코인/사운드.
+        if o.isValid and o.isBonus then
+            -- 이탈: 보라 플래시 + 큰 펀치 + 팡파레 + 다량 코인.
+            self:FlashPrice(Color(0.72, 0.45, 1.0, 1.0), self.PricePunchScale)
+            _SoundService:PlaySound(self.SfxBonus, 1)
+            self:SpawnCoins(self.CoinCountBonus, true)
+            self:ShowDelta(o.bonus, Color(0.82, 0.58, 1.0, 1.0))
+        elseif o.isValid then
+            -- 유효: 노랑 플래시 + 중간 펀치 + 성공음 + 소량 코인.
+            self:FlashPrice(Color(1.0, 0.9, 0.35, 1.0), (self.PricePunchScale + 1.0) * 0.5)
+            _SoundService:PlaySound(self.SfxValid, 1)
+            self:SpawnCoins(self.CoinCountValid, false)
+            self:ShowDelta(o.bonus, Color(1.0, 0.88, 0.3, 1.0))
+        else
+            -- 잡옵/비유효: 소폭 상승, 회색 델타, 기본음(코인 없음).
+            self:FlashPrice(Color(0.75, 0.78, 0.85, 1.0), 1.06)
+            _SoundService:PlaySound(self.SfxClick, 1)
+            self:ShowDelta(o.bonus, Color(0.72, 0.74, 0.8, 1.0))
         end
     end
 
@@ -585,7 +972,9 @@ script ScratchTicketManager extends Component
 
     @ExecSpace("ClientOnly")
     method void OnAllRevealed()
-        -- 3줄 공개 완료: 파괴면 짧은 연출 후 자동 복귀, 아니면 판매가 표시 + 판매/재사용 활성.
+        -- 3줄 공개 완료: 파괴면 즉시 복귀 연출, 아니면 별도 축하 피날레 없이
+        -- 판매가만 최종값(등급·이탈 배수 반영)으로 조용히 확정 + 판매/재사용 활성.
+        -- (per-line 줄별 공개 연출이 이미 각 줄에서 발동됨 → 중복 피날레 제거. 꽝은 마지막 잡옵 줄이 조용.)
         if _GameManager.IsCurrentDestroyed then
             -- 안전망: 조기 트리거를 놓친 경우에도 파괴 연출 보장.
             self:StartDestroySequence()
@@ -593,9 +982,8 @@ script ScratchTicketManager extends Component
             return
         end
         if isvalid(self.priceWindow) then self.priceWindow.Enable = true end
-        if isvalid(self.priceText) then
-            self.priceText.Text = self:Comma(_GameManager.CurrentPrice) .. " 메소"
-        end
+        -- 최종 판매가로 카운트업(서버 CurrentPrice가 SSOT — per-line 누적치엔 등급 배수가 없으므로 여기서 확정).
+        self:StartPriceScroll(_GameManager.CurrentPrice)
         -- 5/5(상환 미납) 도달 시 재사용 금지 — 팔기만 가능. (다음주 정산 흐름)
         self:SetButtonEnabled(self.reuseButton, not _GameManager.IsRepaymentDue)
         self:SetButtonEnabled(self.sellButton, true)
@@ -661,6 +1049,78 @@ script ScratchTicketManager extends Component
                 if isvalid(lab.Entity) and isvalid(lab.Entity.UITransformComponent) then
                     local wy = math.sin(self.rainbowTime * 6 + idx) * 6
                     lab.Entity.UITransformComponent.anchoredPosition = Vector2(0, wy)
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void InitLabelFX()
+        -- 옵션 라벨 3줄의 공개 팝 상태를 비활성으로 초기화.
+        self.labelFX = {}
+        for i = 1, 3 do
+            self.labelFX[i] = { t = -1, peak = 1.0, wobble = 0, shake = false }
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StartLabelFX(integer index, number peak, number wobbleDeg, boolean shake)
+        -- 한 줄의 공개 팝 연출 시작(스케일 펀치 + 선택적 회전 흔들림/파괴 지터).
+        if self.labelFX == nil then self:InitLabelFX() end
+        local fx = self.labelFX[index]
+        if fx == nil then return end
+        fx.t = 0
+        fx.peak = peak
+        fx.wobble = wobbleDeg
+        fx.shake = shake
+        log("[ScratchTicket] label FX i=" .. tostring(index) .. " peak=" .. tostring(peak)
+            .. " wobble=" .. tostring(wobbleDeg) .. " shake=" .. tostring(shake))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StartLabelReveal(integer index, any o)
+        -- 공개 타입별 라벨 팝 강도 매핑: 이탈>유효>잡옵. (파괴는 별도 처리)
+        if o.isValid and o.isBonus then
+            self:StartLabelFX(index, self.LabelPunchBonus, self.LabelWobbleDeg, false)
+        elseif o.isValid then
+            self:StartLabelFX(index, self.LabelPunchValid, 0, false)
+        else
+            self:StartLabelFX(index, self.LabelPunchJunk, 0, false)
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateLabelFX(number delta)
+        -- 활성 라벨의 공개 팝을 sin 대칭으로 보간(스케일/회전/파괴 지터), 종료 시 원복.
+        if self.labelFX == nil then return end
+        local labels = { self.label1, self.label2, self.label3 }
+        for i = 1, 3 do
+            local fx = self.labelFX[i]
+            if fx ~= nil and fx.t >= 0 then
+                fx.t = fx.t + delta
+                local dur = self.LabelPunchTime
+                local k = 1.0
+                if dur > 0 then k = fx.t / dur end
+                local lab = labels[i]
+                if k >= 1.0 then
+                    fx.t = -1
+                    if isvalid(lab) and isvalid(lab.Entity) and isvalid(lab.Entity.UITransformComponent) then
+                        local ui = lab.Entity.UITransformComponent
+                        ui.UIScale = Vector3(1, 1, 1)
+                        ui.UIRotation = Vector3(0, 0, 0)
+                        if fx.shake then ui.anchoredPosition = Vector2(0, 0) end
+                    end
+                elseif isvalid(lab) and isvalid(lab.Entity) and isvalid(lab.Entity.UITransformComponent) then
+                    local ui = lab.Entity.UITransformComponent
+                    local s = 1 + (fx.peak - 1) * math.sin(k * math.pi)
+                    ui.UIScale = Vector3(s, s, 1)
+                    if fx.wobble ~= 0 then
+                        ui.UIRotation = Vector3(0, 0, fx.wobble * math.sin(k * math.pi * 3) * (1 - k))
+                    end
+                    if fx.shake then
+                        local jx = (_UtilLogic:RandomDouble() - 0.5) * 2 * self.LabelShakeAmp
+                        ui.anchoredPosition = Vector2(jx, 0)
+                    end
                 end
             end
         end
@@ -738,8 +1198,47 @@ script ScratchTicketManager extends Component
             log("[ScratchTicket] sell ignored: no cube used (button should be disabled)")
             return
         end
+        -- 판매 확정 요청(서버는 즉시 지급하지 않고 IsSalePending으로 전환 → 결과 창 표시). 중복 클릭 방지.
         log("[ScratchTicket] request sell (with potential)")
         _GameManager:RequestSellItem()
+        self:SetButtonEnabled(self.sellButton, false)
+        self:SetButtonEnabled(self.reuseButton, false)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnCollectClicked()
+        -- 수령하기: 서버에 판매 수령 요청(메소 지급 + 아이템 정리). 이후 isActive 게이팅이 UI를 닫고 상점 복귀.
+        if not _GameManager.IsSalePending then
+            log("[ScratchTicket] collect ignored: no pending sale")
+            return
+        end
+        log("[ScratchTicket] request collect sale")
+        _GameManager:RequestCollectSale()
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ShowSaleResult()
+        -- 판매 확정(수령 대기) → 결과 창 표시(무기 아이콘 + 판매가). 모달: 긁기/버튼 차단.
+        self.saleShown = true
+        self.scratchReady = false
+        local eq = _BlacksmithConfig:GetEquipment(_GameManager.PendingSaleItemId)
+        if eq ~= nil and isvalid(self.saleWeaponIcon) then
+            local spr = self.saleWeaponIcon.SpriteGUIRendererComponent
+            if isvalid(spr) then spr.ImageRUID = "thumbnail://" .. eq.icon end
+        end
+        if isvalid(self.saleSoldText) then
+            self.saleSoldText.Text = self:Comma(_GameManager.PendingSalePrice) .. " 메소에\n판매되었습니다!"
+        end
+        if isvalid(self.saleResultGroup) then self.saleResultGroup.Enable = true end
+        log("[ScratchTicket] sale result shown: item=" .. _GameManager.PendingSaleItemId
+            .. " price=" .. tostring(_GameManager.PendingSalePrice))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void HideSaleResult()
+        -- 판매 결과 창 숨김.
+        self.saleShown = false
+        if isvalid(self.saleResultGroup) then self.saleResultGroup.Enable = false end
     end
 
     @ExecSpace("ClientOnly")
@@ -868,6 +1367,13 @@ script ScratchTicketManager extends Component
         if self.crumbs ~= nil then
             for i = 1, #self.crumbs do
                 local rec = self.crumbs[i]
+                rec.active = false
+                if isvalid(rec.entity) then rec.entity.Enable = false end
+            end
+        end
+        if self.coins ~= nil then
+            for i = 1, #self.coins do
+                local rec = self.coins[i]
                 rec.active = false
                 if isvalid(rec.entity) then rec.entity.Enable = false end
             end

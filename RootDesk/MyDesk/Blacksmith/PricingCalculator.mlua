@@ -9,6 +9,30 @@ script PricingCalculator extends Logic
         log("[PricingCalculator] ready")
     end
 
+    method integer GetOptionBonus(string equipId, any o)
+        -- 옵션 한 줄의 판매가 보너스(순수 함수). 조합보너스·등급/이탈 배수는 포함하지 않는다.
+        --   파괴 줄은 0(판매가 계산 무효). 스크래치 UI의 줄별 실시간 판매가 상승과 Calculate가 공유하는 SSOT. (pricing §9)
+        if o.isDestroy then return 0 end
+        local d = _BlacksmithConfig:GetData()
+        if o.optionType == "Junk" then
+            local j = d.junkOptions[o.optionName]
+            return (j ~= nil and j.bonus or 0)
+        elseif o.optionType == "Main" then
+            if _BlacksmithConfig:IsValidMain(equipId, o.optionName) then
+                if o.optionGroup == "MainStat" then
+                    return d.optionBonus.validStat
+                elseif o.optionName == "BATK" then
+                    return d.optionBonus.validBatk       -- 유효 보스공격력 별도 보너스
+                else
+                    return d.optionBonus.validAtk         -- 유효 공격/마력
+                end
+            else
+                return d.optionBonus.invalidMain          -- 비유효 주요 옵션
+            end
+        end
+        return 0
+    end
+
     method any Calculate(string equipId, any pr)
         -- equipId: 현재 장비 id, pr: PotentialService 결과 데이터.
         -- 반환: { destroyed, price, ... } — destroyed=true면 판매 불가(Destroyed).
@@ -27,31 +51,19 @@ script PricingCalculator extends Logic
         end
 
         -- 옵션 보너스 합 + 유효 옵션 집계 (pricing §8·§9)
+        -- 줄별 보너스는 GetOptionBonus(SSOT)로 계산 — 스크래치 UI 실시간 상승과 동일한 값이 나오도록 한다.
         local optionBonusSum = 0
         local validStatCount, validAttackCount, validMainCount, validBonusCount = 0, 0, 0, 0
         for _, o in ipairs(pr.options) do
-            if o.optionType == "Junk" then
-                local j = d.junkOptions[o.optionName]
-                optionBonusSum += (j ~= nil and j.bonus or 0)
-            elseif o.optionType == "Main" then
-                if _BlacksmithConfig:IsValidMain(equipId, o.optionName) then
-                    validMainCount += 1
-                    if o.optionGroup == "MainStat" then
-                        validStatCount += 1
-                        optionBonusSum += d.optionBonus.validStat
-                    else
-                        -- 유효 공격계열: 보스공격력은 별도 보너스
-                        if o.optionName == "BATK" then
-                            optionBonusSum += d.optionBonus.validBatk
-                        else
-                            optionBonusSum += d.optionBonus.validAtk
-                        end
-                        validAttackCount += 1
-                    end
-                    if o.isBonusValue then validBonusCount += 1 end  -- 유효 이탈만 집계
+            optionBonusSum += self:GetOptionBonus(equipId, o)
+            if o.optionType == "Main" and _BlacksmithConfig:IsValidMain(equipId, o.optionName) then
+                validMainCount += 1
+                if o.optionGroup == "MainStat" then
+                    validStatCount += 1
                 else
-                    optionBonusSum += d.optionBonus.invalidMain  -- 비유효 주요 옵션
+                    validAttackCount += 1
                 end
+                if o.isBonusValue then validBonusCount += 1 end  -- 유효 이탈만 집계
             end
         end
 
