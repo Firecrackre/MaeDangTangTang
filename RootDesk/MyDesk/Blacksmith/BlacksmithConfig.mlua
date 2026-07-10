@@ -22,8 +22,8 @@ script BlacksmithConfig extends Logic
 		        local d = {}
 		
 		        -- 시작/재화 기본값 (flow §5, concept §6-2)
-		        d.startMeso = 70000
-		        d.cubeCost = 8000              -- 이상한 큐브 사용 비용(폴백 — d.cubes.weird.cost가 SSOT)
+		        d.startMeso = 40000
+		        d.cubeCost = 5000              -- 이상한 큐브 사용 비용(폴백 — d.cubes.weird.cost가 SSOT)
 		        d.bonusChance = 15             -- 이탈 확률(%) — 주요 옵션 1줄당 (potential §8)
 		
 		        -- 큐브 종류 (concept §6-2, potential §12). 메커톤: 이상한 큐브 + 장인의 큐브 2종.
@@ -33,17 +33,17 @@ script BlacksmithConfig extends Logic
 		        --   ⚠ icon은 plain 스프라이트 RUID(thumbnail:// 접두사 없이 ImageRUID에 직접 설정). 메이플 공식 큐브 아이콘.
 		        --   이상한 큐브=수상한 큐브, 장인의 큐브=블랙 큐브 (msw-search 리소스 검색).
 		        d.cubes = {
-		            weird  = { key = "weird",  label = "이상한 큐브", cost = 8000,  allowDestroy = true,  icon = "31e4268ff65b4281abd509162ca199e3" },
-		            master = { key = "master", label = "장인의 큐브", cost = 45000, allowDestroy = false, icon = "1edec01f822c422293f62729e7462a22" },
+		            weird  = { key = "weird",  label = "이상한 큐브", cost = 5000,  allowDestroy = true,  icon = "31e4268ff65b4281abd509162ca199e3" },
+		            master = { key = "master", label = "장인의 큐브", cost = 15000, allowDestroy = false, icon = "1edec01f822c422293f62729e7462a22" },
 		        }
 		
 		        -- 등급 (potential §4)
 		        d.gradeOrder = {"Rare", "Epic", "Unique", "Legendary"}
 		        d.gradeProb = { Rare = 60, Epic = 28, Unique = 10, Legendary = 2 }       -- 합 100
-		        d.gradeMult = { Rare = 1.0, Epic = 1.7, Unique = 2.8, Legendary = 4.2 }  -- 등급 배수
+		        d.gradeMult = { Rare = 1.0, Epic = 1.5, Unique = 2.3, Legendary = 3.5 }  -- 등급 배수
 		
 		        -- 옵션 타입 확률 — 각 줄 개별 판정 (potential §5). 합 100.
-		        d.optionTypeProb = { Main = 62, Junk = 34, Destroy = 4 }
+		        d.optionTypeProb = { Main = 45, Junk = 45, Destroy = 10 }
 		
 		        -- 주요 옵션 풀: 주스탯4 + 공격계열3 = 7종 균등 추첨 (potential §6)
 		        d.mainPool = {"STR", "DEX", "INT", "LUK", "ATK", "MATK", "BATK"}
@@ -76,16 +76,16 @@ script BlacksmithConfig extends Logic
 		        }
 		
 		        -- 이탈 배수 — 유효 이탈 개수 기준 (pricing §12). 키 = 개수(0~3)
-		        d.bonusMult = { [0] = 1.0, [1] = 1.3, [2] = 1.8, [3] = 2.5 }
+		        d.bonusMult = { [0] = 1.0, [1] = 1.2, [2] = 1.5, [3] = 2.0 }
 		
 		        -- 조합 보너스 — 우선순위 높은 순서대로. 적용은 PricingCalculator에서 최고 1개만. (pricing §10)
 		        d.comboBonus = {
-		            { key = "godAttack",  bonus = 220000 },  -- 유효 공격계열 3줄 + 유효 이탈 3개 (신급 대박)
-		            { key = "legendStat", bonus = 220000 },  -- 유효 동일 주스탯 3줄 + 유효 이탈 3개 (전설급 대박)
-		            { key = "attack3",    bonus = 140000 },  -- 유효 공격계열 3줄
-		            { key = "sameStat3",  bonus = 120000 },  -- 유효 동일 주스탯 3줄
-		            { key = "main3",      bonus = 80000  },  -- 유효 주요 옵션 3줄
-		            { key = "main2bonus", bonus = 45000  },  -- 유효 주요 옵션 2줄 + 이탈 포함
+		            { key = "godAttack",  bonus = 150000 },  -- 유효 공격계열 3줄 + 유효 이탈 3개 (신급 대박)
+		            { key = "legendStat", bonus = 150000 },  -- 유효 동일 주스탯 3줄 + 유효 이탈 3개 (전설급 대박)
+		            { key = "attack3",    bonus = 90000  },  -- 유효 공격계열 3줄
+		            { key = "sameStat3",  bonus = 75000  },  -- 유효 동일 주스탯 3줄
+		            { key = "main3",      bonus = 50000  },  -- 유효 주요 옵션 3줄
+		            { key = "main2bonus", bonus = 35000  },  -- 유효 주요 옵션 2줄 + 이탈 포함
 		        }
 		
 		        -- 장비 5종 (flow §6, pricing §7·§8). 무기 *종류*는 유효 옵션(stat/atk)·아이콘만 결정한다.
@@ -115,27 +115,27 @@ script BlacksmithConfig extends Logic
 		        -- prob = 0단계(더좋은물품 미보유) 기본 등장 확률(%) — 무기 상점 기획서 §9 기준안(60/30/9/1/0, 합 100).
 		        --   0단계에서는 레전더리 0%·유니크 1% — 상위 등급은 증강 '더 좋은 물품'(betterGoodsGradeProb)으로만 열린다.
 		        d.weaponGrades = {
-		            Common    = { key = "Common",    label = "커먼",     basePrice = 25000,  buyCost = 30000,  prob = 60, color = {0.62, 0.64, 0.68} },
-		            Rare      = { key = "Rare",      label = "레어",     basePrice = 50000,  buyCost = 60000,  prob = 30, color = {0.30, 0.58, 0.92} },
-		            Epic      = { key = "Epic",      label = "에픽",     basePrice = 100000, buyCost = 120000, prob = 9,  color = {0.70, 0.40, 0.92} },
-		            Unique    = { key = "Unique",    label = "유니크",   basePrice = 200000, buyCost = 240000, prob = 1,  color = {0.96, 0.80, 0.22} },
-		            Legendary = { key = "Legendary", label = "레전더리", basePrice = 400000, buyCost = 480000, prob = 0,  color = {0.40, 0.85, 0.45} },
-		        }
+		    		Common    = { key = "Common",    label = "커먼",     basePrice = 25000,  buyCost = 30000,  prob = 60, color = {0.62, 0.64, 0.68} },
+		    		Rare      = { key = "Rare",      label = "레어",     basePrice = 45000,  buyCost = 54000,  prob = 30, color = {0.30, 0.58, 0.92} },
+		    		Epic      = { key = "Epic",      label = "에픽",     basePrice = 75000,  buyCost = 90000,  prob = 9,  color = {0.70, 0.40, 0.92} },
+		    		Unique    = { key = "Unique",    label = "유니크",   basePrice = 120000, buyCost = 144000, prob = 1,  color = {0.96, 0.80, 0.22} },
+		    		Legendary = { key = "Legendary", label = "레전더리", basePrice = 200000, buyCost = 240000, prob = 0,  color = {0.40, 0.85, 0.45} },
+				}
 		
 		        -- 증강 '더 좋은 물품 들여오기' 단계별 상점 등급 절대 확률표 (blacksmith_upgrade.md §6).
 		        --   0단계(미보유) = 위 weaponGrades.prob(30/30/28/10/2). 각 표의 합은 100.
 		        --   1단계는 레전더리 0% — RollWeaponGrade가 0 가중치를 허용하므로 그대로 동작한다.
 		        d.betterGoodsGradeProb = {
-		            [1] = { Common = 45, Rare = 40, Epic = 12, Unique = 3,  Legendary = 0 },
-		            [2] = { Common = 30, Rare = 42, Epic = 20, Unique = 7,  Legendary = 1 },
-		            [3] = { Common = 18, Rare = 38, Epic = 27, Unique = 13, Legendary = 4 },
+		            [1] = { Common = 35, Rare = 45, Epic = 14, Unique = 6,  Legendary = 0  },
+		            [2] = { Common = 20, Rare = 50, Epic = 19, Unique = 9,  Legendary = 2  },
+		            [3] = { Common = 12, Rare = 35, Epic = 26, Unique = 17, Legendary = 10 },
 		        }
 		
 		        -- 빚 상환 (concept §6-3, flow §15, finance_management.md 상환액 스케줄)
-		        d.debtCycle = 5                                -- N회 큐브 사용마다 상환
-		        d.debtTable = {45000, 75000, 110000, 150000}   -- 1~4주 금액
-		        d.debtGrowth = 1.1                             -- 테이블 범위 밖(5주~)은 매주 ×1.1
-		        d.winStage = 5                                 -- 상환 N회 성공 시 승리
+		        d.debtCycle = 5                              -- N회 큐브 사용마다 상환 (5/5 = 한 주 경과)
+		        d.debtTable = {60000, 130000, 220000, 330000} -- 1~4주 금액 (stage1 45000 > 시작메소 40000 → 초기부터 압박)
+		        d.debtGrowth = 1.14                           -- 테이블 범위 밖(5주~)은 매주 ×1.1 (10% 증가, 1000단위 반올림)
+		        d.winStage = 5                               -- 상환 N회 성공 시 승리 (finance_management.md 승리 조건)
 		
 		        -- ── 대장 기술(증강) (blacksmith_upgrade.md §5·§6) ──────────────────────────
 		        --   증강은 상환 단계 도달 시 3택 1로 획득(MVP 트리거). 같은 증강 중복 시 단계 상승(최대 3).
@@ -148,7 +148,7 @@ script BlacksmithConfig extends Logic
 		        -- 증강 구매 비용 = 증강이 '도달할 단계' 기준(단계 높을수록 비쌈). (blacksmith_upgrade.md §3)
 		        --   구매 방식(유저 확정): 로비 '대장 기술' → 3택 창 → 각 증강 하단의 구매 골드로 즉시 지불.
 		        --   1단계 7,500 / 2단계 12,500 / 3단계 20,000. 범위 밖은 마지막 값으로 클램프.
-		        d.augmentCosts = {7500, 12500, 20000}
+		        d.augmentCosts = {30000, 65000, 120000}
 		        -- icon: 증강 아이콘 스프라이트 RUID(증강 UI 슬롯/보유 목록). plain 스프라이트라 thumbnail:// 접두사 없이
 		        --   ImageRUID에 직접 설정한다(cubes.icon 패턴). msw-search로 확보한 메이플 공식 아이템 아이콘.
 		        d.augments = {
@@ -162,7 +162,7 @@ script BlacksmithConfig extends Logic
 		            --   stages = 주요 옵션 1줄이 '유효 옵션'으로 강제될 확률(%). 10/20/45 (blacksmith_upgrade.md §6).
 		            smithEye = { key = "smithEye", name = "대장장이의 눈", type = "validOption",
 		                applyTarget = "RollLine", desc = "현재 무기의 유효 옵션 등장 확률 증가",
-		                stages = {15, 30, 45}, icon = "2c87d6385a60420ab55fa8d36ff3d6dc" },  -- 감정 돋보기
+		                stages = {10, 20, 45}, icon = "2c87d6385a60420ab55fa8d36ff3d6dc" },  -- 감정 돋보기
 		            -- 가격 협상: 무기 구매가 감소, 게임 끝까지 유지 (§6, 적용=RequestBuyItem)
 		            --   stages = 구매가 감소율(%). 10/18/40 (blacksmith_upgrade.md §6).
 		            priceNego = { key = "priceNego", name = "가격 협상", type = "buyCost",
@@ -172,7 +172,7 @@ script BlacksmithConfig extends Logic
 		            --   stages = 판매가/상환이자 동시 증가율(%). 10/20/30.
 		            riskyDeal = { key = "riskyDeal", name = "위험 거래", type = "riskReward",
 		                applyTarget = "Pricing+Debt", desc = "상환 이자 증가, 대신 판매가 증가",
-		                stages = {10, 18, 30}, icon = "8114bc5eeba544989e14a8e46a1ea0f2" },  -- 시한폭탄
+		                stages = {10, 20, 30}, icon = "8114bc5eeba544989e14a8e46a1ea0f2" },  -- 시한폭탄
 		        }
 		
 		        -- ── 재정 관리 (finance_management.md) ─────────────────────────────────────
