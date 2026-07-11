@@ -56,6 +56,13 @@ script ScratchTicketManager extends Component
     -- 실시간 판매가 상승 연출용(신규 UIBuilder → TextGUIRendererComponent). UUID는 UIBuilder가 주입.
     property TextGUIRendererComponent priceDelta = "b8cdf5d2-f5a6-4014-9c84-f3116f5d4c97"   -- "+15,000" 상승 델타 팝업
 
+    -- 현재 무기 아이콘 + 설명(등급·무기명 / 유효 주스탯 / 유효 공격 계열).
+    -- 레이아웃 이동으로 두 BG는 PriceWindow 밖 루트 직속 형제가 됨 → BG Enable을 명시 토글(SetWeaponInfoShown).
+    property Entity weaponIconBG = "552bfa1a-332e-4ace-b03a-b50f8338b4ce"                        -- 무기 아이콘 배경 컨테이너
+    property Entity weaponDescBG = "96e64451-427a-43b9-b698-4eafa4f63dad"                        -- 무기 설명 배경 컨테이너
+    property SpriteGUIRendererComponent weaponIcon = "d3da2db1-d445-4219-93be-b303589a1bae"      -- 아바타 무기 썸네일(thumbnail://)
+    property TextGUIRendererComponent weaponDescText = "aadfc640-2f20-4d70-aad9-bd360c382812"    -- 3줄 무기 설명(무기 상점 BuildDesc 형식)
+
     -- 코인 낙하 풀(특별 수치 연출). CrumbLayer 패턴. UUID는 UIBuilder가 주입.
     property Entity coinLayer = "721cd088-6a34-4312-87e6-86af26b4ad8b"
 
@@ -216,6 +223,7 @@ script ScratchTicketManager extends Component
 
     property string lastPotentialData = ""
     property string lastCubeType = "weird"
+    property string lastWeaponKey = ""   -- 무기 아이콘/설명 갱신 에지 감지용(CurrentItemId|CurrentWeaponGrade)
 
     property any optionLines = nil       -- parsed 3-line data {label,value,unit,optionType,isBonus,isDestroy,isValid,revealed}
     property integer revealedCount = 0
@@ -604,6 +612,13 @@ script ScratchTicketManager extends Component
         -- 증강 '귀한 태생' 단계 변화 감지 → 큐브 가격 라벨 갱신(구매로 큐브가가 오르면 즉시 반영).
         self:RefreshCubeCost()
 
+        -- 현재 무기(아이템 id + 등급) 변화 감지 → 무기 아이콘/설명 갱신(신규 무기 구매·재시작 커버).
+        local weaponKey = _GameManager.CurrentItemId .. "|" .. _GameManager.CurrentWeaponGrade
+        if weaponKey ~= self.lastWeaponKey then
+            self.lastWeaponKey = weaponKey
+            self:RefreshWeaponInfo()
+        end
+
         -- 잠재 데이터 변화 감지 → 대기/스크래치 세팅 전환.
         local pdata = _GameManager.CurrentPotentialData
         if pdata ~= self.lastPotentialData then
@@ -640,6 +655,35 @@ script ScratchTicketManager extends Component
     end
 
     @ExecSpace("ClientOnly")
+    method void RefreshWeaponInfo()
+        -- 현재 보유 무기 아이콘 + 3줄 설명을 PriceWindow에 표기.
+        -- 무기 상점 WeaponShopManager:BuildDesc 형식(판매가 줄 제외 3줄). 서버 권위값 표시 전용.
+        local eq = _GameManager:GetCurrentEquipment()
+        if eq == nil then return end
+        local grade = _GameManager.CurrentWeaponGrade
+        -- 아이콘: 아바타 무기 아이템 RUID → thumbnail:// 접두사(SSOT: GetWeaponIcon).
+        if isvalid(self.weaponIcon) then
+            self.weaponIcon.ImageRUID = "thumbnail://" .. _BlacksmithConfig:GetWeaponIcon(_GameManager.CurrentItemId, grade)
+        end
+        -- 설명 3줄: 등급 무기명 / 유효 주스탯 / 유효 공격 계열.
+        local d = _BlacksmithConfig:GetData()
+        local wg = _BlacksmithConfig:GetWeaponGrade(grade)
+        local gradeLabel = ""
+        if wg ~= nil then gradeLabel = wg.label .. " " end
+        local atkLabels = {}
+        for _, a in ipairs(eq.atk) do
+            table.insert(atkLabels, d.mainOptions[a].label)
+        end
+        local desc = gradeLabel .. eq.label .. "\n"
+            .. "유효 주스탯: " .. d.mainOptions[eq.stat].label .. "\n"
+            .. "유효 공격 계열: " .. table.concat(atkLabels, ", ")
+        if isvalid(self.weaponDescText) then
+            self.weaponDescText.Text = desc
+        end
+        log("[Scratch] RefreshWeaponInfo weapon=" .. eq.label .. " grade=" .. tostring(grade))
+    end
+
+    @ExecSpace("ClientOnly")
     method void SetContainersActive(boolean on)
         -- 루트 직속 컨테이너들을 한꺼번에 토글(큐브선택/HUD). 판매가창은 별도(공개 완료 시만).
         -- board(복권)는 큐브 사용(낙하) 전까지 숨김 — 활성 진입 시에도 켜지 않는다(구매창만 노출).
@@ -657,6 +701,16 @@ script ScratchTicketManager extends Component
         if not on then self.scratchReady = false end   -- 맵 이탈/아이템 없음 → 긁기 차단.
         -- 비활성 후에는 OnUpdate가 early return하여 UpdateCursor(루프 정지 에지)가 안 돌므로 여기서 명시 정지.
         if not on then self:SetScratchLoop(false) end
+        -- 무기 아이콘/설명 BG는 활성 상태(active)와 함께 토글(스크래치 화면 내내 표시, 시작/비활성 시 숨김).
+        self:SetWeaponInfoShown(on)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SetWeaponInfoShown(boolean on)
+        -- 무기 아이콘/설명 배경(WeaponIconBG/WeaponDescBG)을 스크래치 활성 상태와 함께 토글.
+        -- (레이아웃 이동으로 PriceWindow 밖 루트 형제가 되어 부모 캐스케이드 숨김이 끊김 → 명시 토글.)
+        if isvalid(self.weaponIconBG) then self.weaponIconBG.Enable = on end
+        if isvalid(self.weaponDescBG) then self.weaponDescBG.Enable = on end
     end
 
     @ExecSpace("ClientOnly")
