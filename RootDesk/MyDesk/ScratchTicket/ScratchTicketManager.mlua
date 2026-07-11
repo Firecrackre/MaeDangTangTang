@@ -1436,21 +1436,24 @@ script ScratchTicketManager extends Component
 
     @ExecSpace("ClientOnly")
     method boolean IsSpecialLine(integer index)
-        -- 유효옵션/이탈/파괴 줄이면 true(여러 번 긁어야 하는 특수 줄). 잡옵/일반은 false.
+        -- 유효옵션/파괴 줄이면 true(여러 번 긁어야 하는 특수 줄). 잡옵/일반은 false.
+        -- 이탈(isBonus)은 단독 조건이 아니다: 유효+이탈은 isValid로 자연히 포함되고,
+        --   비유효 이탈(isValid=0/isBonus=1)은 평범한 잡옵과 동일하게 긁힌다.
         -- 조합 보너스는 결과 단위라 줄 플래그와 무관 → 자동 제외(평소대로 긁힘).
         if self.optionLines == nil then return false end
         local o = self.optionLines[index]
         if o == nil then return false end
-        return o.isValid or o.isBonus or o.isDestroy
+        return o.isValid or o.isDestroy
     end
 
     @ExecSpace("ClientOnly")
     method boolean IsPositiveLine(integer index)
-        -- 긍정 옵션(유효옵션/이탈) 줄이면 true. 파괴는 제외(파괴는 완료 기준을 올리지 않는다).
+        -- 긍정(유효) 옵션 줄이면 true. 유효+이탈은 isValid로 포함되고, 비유효 이탈은 잡옵과
+        --   동일 완료 기준을 쓰도록 제외한다. 파괴도 제외(파괴는 완료 기준을 올리지 않는다).
         if self.optionLines == nil then return false end
         local o = self.optionLines[index]
         if o == nil then return false end
-        return (o.isValid or o.isBonus) and (not o.isDestroy)
+        return o.isValid and (not o.isDestroy)
     end
 
     @ExecSpace("ClientOnly")
