@@ -126,18 +126,20 @@ script BlacksmithConfig extends Logic
 		        --     별개 테이블(weaponGrades vs gradeProb)이라 기능 충돌은 없다. 혼동 주의.
 		        --   구매가(buyCost) = 기본판매가(basePrice) × 1.2 → 구매가 > 판매가. 큐브로 잠재를 안 올리면 손해
 		        --     (도박 강제 경제, weapon_shop.md §7 / 초안 §7 비율 1.2). 시작메소 40000이면 초반엔 커먼만 구매 가능.
-		        --   color = 슬롯 테두리 색(등급 시각화), prob = 상점 슬롯 추첨 확률(%). prob 합 100.
+		        --   color = (레거시) 등급 색. 상점 슬롯 프레임은 이제 색 대신 image(희귀도 프레임 스프라이트)로 시각화한다.
+		        --   image = 슬롯 프레임 희귀도 이미지(plain 스프라이트 RUID, thumbnail:// 없이 ImageRUID에 직접 설정). 사용자 제공 에셋.
+		        --   prob = 상점 슬롯 추첨 확률(%). prob 합 100.
 		        --   수치는 초기 기준안(weapon_shop.md §7·§9 참조) — 플레이테스트로 조정.
 		        d.shopSlotCount = 3  -- 상점에 동시에 노출되는 무기 슬롯 수 (weapon_shop.md §4 기준: 3슬롯)
 		        d.weaponGradeOrder = {"Common", "Rare", "Epic", "Unique", "Legendary"}
 		        -- prob = 0단계(더좋은물품 미보유) 기본 등장 확률(%) — 무기 상점 기획서 §9 기준안(60/30/9/1/0, 합 100).
 		        --   0단계에서는 레전더리 0%·유니크 1% — 상위 등급은 증강 '더 좋은 물품'(betterGoodsGradeProb)으로만 열린다.
 		        d.weaponGrades = {
-		    		Common    = { key = "Common",    label = "커먼",     basePrice = 25000,  buyCost = 30000,  prob = 60, color = {0.62, 0.64, 0.68} },
-		            Rare      = { key = "Rare",      label = "레어",     basePrice = 50000,  buyCost = 60000,  prob = 30, color = {0.30, 0.58, 0.92} },
-		            Epic      = { key = "Epic",      label = "에픽",     basePrice = 100000, buyCost = 120000, prob = 9,  color = {0.70, 0.40, 0.92} },
-		            Unique    = { key = "Unique",    label = "유니크",   basePrice = 200000, buyCost = 240000, prob = 1,  color = {0.96, 0.80, 0.22} },
-		            Legendary = { key = "Legendary", label = "레전더리", basePrice = 400000, buyCost = 480000, prob = 0,  color = {0.40, 0.85, 0.45} },
+		    		Common    = { key = "Common",    label = "커먼",     basePrice = 25000,  buyCost = 30000,  prob = 60, color = {0.62, 0.64, 0.68}, image = "93b4517e8ad7439a9bc0756257e1454f" },
+		            Rare      = { key = "Rare",      label = "레어",     basePrice = 50000,  buyCost = 60000,  prob = 30, color = {0.30, 0.58, 0.92}, image = "5882531c2b5841cbb68127cdb28cfe36" },
+		            Epic      = { key = "Epic",      label = "에픽",     basePrice = 100000, buyCost = 120000, prob = 9,  color = {0.70, 0.40, 0.92}, image = "7afb7a9b2fb647e991dbbd51c370a8d3" },
+		            Unique    = { key = "Unique",    label = "유니크",   basePrice = 200000, buyCost = 240000, prob = 1,  color = {0.96, 0.80, 0.22}, image = "84bfdd28bcf1441cbff9dc8879c9cede" },
+		            Legendary = { key = "Legendary", label = "레전더리", basePrice = 400000, buyCost = 480000, prob = 0,  color = {0.40, 0.85, 0.45}, image = "f914e97740fd473ea2f3ace6dd247e10" },
 				}
 		
 		        -- 증강 '더 좋은 물품 들여오기' 단계별 상점 등급 절대 확률표 (blacksmith_upgrade.md §6).

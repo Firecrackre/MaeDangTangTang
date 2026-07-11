@@ -387,8 +387,8 @@ script WeaponShopManager extends Logic
 		                            i1.SpriteGUIRendererComponent.ImageRUID = i2.SpriteGUIRendererComponent.ImageRUID
 		                        end
 		                        self:SetReelIconRandom(i2)
-		                        -- 릴이 한 칸 넘어갈 때마다 슬롯 배경을 무작위 등급색으로 틴트(도는 느낌 강화).
-		                        self:TintSlotRandomGrade(i)
+		                        -- 릴이 한 칸 넘어갈 때마다 슬롯 프레임을 무작위 희귀도 이미지로 교체(도는 느낌 강화).
+		                        self:CycleSlotRarityImage(i)
 		                    end
 		                    local i1 = self.reelIcon1[i]
 		                    local i2 = self.reelIcon2[i]
@@ -626,14 +626,16 @@ script WeaponShopManager extends Logic
 	end
 
 	@ExecSpace("ClientOnly")
-	method void TintSlotRandomGrade(integer index)
-		        -- 릴이 한 칸 넘어갈 때 슬롯 배경을 무작위 등급색으로 틴트(정지 시 RenderSlot이 실제 등급색으로 복원).
+	method void CycleSlotRarityImage(integer index)
+		        -- 릴이 한 칸 넘어갈 때 슬롯 프레임 배경을 무작위 희귀도 이미지로 교체(정지 시 RenderSlot이 실제 등급 이미지로 고정).
+		        --   색 틴트 폐기 — 프레임 자체가 희귀도별 이미지(config wg.image). Color는 기본 흰색 유지.
 		        local d = _BlacksmithConfig:GetData()
 		        local order = d.weaponGradeOrder
 		        local wg = d.weaponGrades[order[_UtilLogic:RandomIntegerRange(1, #order)]]
 		        local slot = self.slotEntities[index]
-		        if wg ~= nil and isvalid(slot) and isvalid(slot.SpriteGUIRendererComponent) then
-		            slot.SpriteGUIRendererComponent.Color = Color(wg.color[1], wg.color[2], wg.color[3], 1.0)
+		        if wg ~= nil and wg.image ~= nil and isvalid(slot) and isvalid(slot.SpriteGUIRendererComponent) then
+		            slot.SpriteGUIRendererComponent.ImageRUID = wg.image
+		            slot.SpriteGUIRendererComponent.Color = Color(1.0, 1.0, 1.0, 1.0)
 		        end
 	end
 
@@ -690,10 +692,11 @@ script WeaponShopManager extends Logic
 		        local wg = _BlacksmithConfig:GetWeaponGrade(grade)
 		        if eq == nil or wg == nil then return end
 
-		        -- 등급 테두리색: 슬롯 버튼 배경 틴트.
+		        -- 등급 시각화: 슬롯 프레임 배경을 해당 등급의 희귀도 이미지로 고정(색 틴트 폐기, Color 기본 흰색).
 		        local sprite = slot.SpriteGUIRendererComponent
-		        if isvalid(sprite) then
-		            sprite.Color = Color(wg.color[1], wg.color[2], wg.color[3], 1.0)
+		        if isvalid(sprite) and wg.image ~= nil then
+		            sprite.ImageRUID = wg.image
+		            sprite.Color = Color(1.0, 1.0, 1.0, 1.0)
 		        end
 
 		        -- 아이콘(아바타 무기 아이템 → thumbnail:// 접두사 필요).

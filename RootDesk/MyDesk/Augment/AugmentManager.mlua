@@ -46,6 +46,8 @@ script AugmentManager extends Logic
     property ButtonComponent btnCloseOwned = "92a96c7f-92a6-46bc-b568-c72f66af000b" -- 보유 목록 X
     property TextGUIRendererComponent emptyChoiceText = "83b781b7-4114-43d2-aa0f-b4a18d969cd1" -- 모든 증강 소진 안내
     property TextGUIRendererComponent emptyOwnedText = "275e4c0f-7d9e-4221-bff1-cf082e82aa1a"  -- 보유 없음 안내
+    property ScrollLayoutGroupComponent ownedScroll = "70c1dbec-8318-439f-8792-be6dafcabeed"   -- 보유 목록 스크롤 컨테이너(ScrollLayoutGroup, 최대 3행 뷰포트)
+    property Entity ownedRowTemplate = "bd085c3c-92f8-49fe-9c42-a3f1a27e5d90"                  -- 보유 목록 행 템플릿(Clone 원본, 평소 비활성)
 
     -- ── 런타임 상태 ──
     property boolean isActive = false
@@ -81,6 +83,17 @@ script AugmentManager extends Logic
     property any ownedHandler = nil
     property any closeOwnedHandler = nil
 
+    -- 보유 목록 스크롤 상태(템플릿 Clone 방식).
+    property any ownedRowClones = nil       -- 현재 보유 목록 Clone 행들(재빌드 시 Destroy).
+    property boolean ownedRendered = false  -- 최초 렌더 여부(데이터 변경 가드).
+    property string ownedRenderData = ""     -- 마지막으로 렌더한 AugmentsData(변경 시에만 재빌드).
+    property integer cloneSeq = 0            -- Clone 이름 유일성 카운터.
+    property number ScrollWheelStep = 0.3    -- 마우스 휠 한 노치당 목표 정규화 이동량(클수록 빠름 — 인스펙터 튜닝).
+    property number ScrollSmooth = 14.0      -- 휠 감속 보간 속도(클수록 목표에 빨리 도달 — 인스펙터 튜닝).
+    property any scrollHandler = nil          -- MouseScrollEvent 핸들러(해제용).
+    property number scrollTarget = -1         -- 휠 스크롤 목표 정규화 위치(-1=비활성). 노치마다 누적.
+    property number scrollCurrent = -1        -- 내가 마지막에 세팅한 애니메이션 위치(엔진 SetScroll은 즉시 스냅이라 == 실제값). 드래그 개입 판별용.
+
     @ExecSpace("ClientOnly")
     method void OnBeginPlay()
         -- 캐싱은 루트가 켜진 상태에서 해야 GetChildByName이 자식을 찾는다 → 캐싱/배선 후 루트를 끈다.
@@ -94,6 +107,14 @@ script AugmentManager extends Logic
         self.lastChoicesData = ""
         self.lastOwnedData = ""
         self.shakeTime = 0
+        -- 보유 목록 스크롤 상태 초기화 + 템플릿 숨김(Clone 원본은 목록에 보이면 안 됨).
+        self.ownedRowClones = {}
+        self.ownedRendered = false
+        self.ownedRenderData = ""
+        self.cloneSeq = 0
+        self.scrollTarget = -1
+        self.scrollCurrent = -1
+        if isvalid(self.ownedRowTemplate) then self.ownedRowTemplate.Enable = false end
 
         if isvalid(self.choiceBoard) and isvalid(self.choiceBoard.UITransformComponent) then
             self.boardBasePos = self.choiceBoard.UITransformComponent.anchoredPosition
@@ -113,6 +134,8 @@ script AugmentManager extends Logic
         if isvalid(self.btnCloseOwned) then
             self.closeOwnedHandler = self.btnCloseOwned.Entity:ConnectEvent(ButtonClickEvent, self.OnCloseOwnedClicked)
         end
+        -- 마우스 휠로 보유 목록 스크롤(ScrollLayoutGroup은 휠 자동처리 안 함 — MouseScrollEvent 직접 배선).
+        self.scrollHandler = _InputService:ConnectEvent(MouseScrollEvent, self.OnMouseScroll)
 
         if isvalid(self.ownedView) then self.ownedView.Enable = false end
         if isvalid(self.choiceView) then self.choiceView.Enable = true end
@@ -197,6 +220,16 @@ script AugmentManager extends Logic
                 end
             end
         end
+        -- 보유 목록 Clone 행 정리(누수 방지).
+        if self.ownedRowClones ~= nil then
+            for _, c in ipairs(self.ownedRowClones) do
+                if isvalid(c) then c:Destroy() end
+            end
+            self.ownedRowClones = {}
+        end
+        if self.scrollHandler ~= nil then
+            _InputService:DisconnectEvent(MouseScrollEvent, self.scrollHandler)
+        end
         _SoundService:StopSound(self.revealLoopSoundRUID)   -- 릴 대기음 안전망 정지.
         _InputService:ResetCursor()   -- 커서가 망치 상태로 남지 않도록 기본 복원.
     end
@@ -271,9 +304,10 @@ script AugmentManager extends Logic
         -- 정지한 슬롯의 구매 버튼 활성 상태 갱신(메소 변화 대응).
         if not self.spinning then self:RefreshChoiceView() end
 
-        -- 보유 목록이 열려 있으면 매 프레임 최신 상태 반영(구매 직후 반영).
+        -- 보유 목록이 열려 있으면 매 프레임 최신 상태 반영(구매 직후 반영) + 휠 스크롤 감속 보간.
         if isvalid(self.ownedView) and self.ownedView.Enable then
             self:RenderOwnedView()
+            self:UpdateWheelScroll(delta)
         end
 
         -- 구매버튼 커서(황금 망치) 상태 갱신.
@@ -663,6 +697,7 @@ script AugmentManager extends Logic
     method void OnOwnedClicked()
         -- '보유 증강' → 보유 목록 열기(3택 창 위 오버레이).
         _SoundService:PlaySound(self.clickSoundRUID, self.sfxVolume)
+        self.ownedRendered = false   -- 열 때마다 최신 보유 상태로 강제 1회 재빌드.
         self:RenderOwnedView()
         if isvalid(self.ownedView) then self.ownedView.Enable = true end
     end
@@ -675,38 +710,96 @@ script AugmentManager extends Logic
     end
 
     @ExecSpace("ClientOnly")
+    method void OnMouseScroll(MouseScrollEvent event)
+        -- 마우스 휠 → 목표(scrollTarget)만 노치 단위로 누적. 실제 이동은 OnUpdate:UpdateWheelScroll가 감속 보간(부드럽게).
+        --   엔진 SetScrollNormalizedPosition은 즉시 스냅(뚝뚝)이라, 직접 노치마다 세팅하면 버벅여 보임 → 내가 프레임마다 목표로 lerp.
+        --   방향: 부호만 사용(플랫폼별 크기 편차 무시). TopToBottom(3): 0=상단·1=하단 → 휠 아래(delta<0)면 목표 증가.
+        if not (isvalid(self.ownedView) and self.ownedView.Enable) then return end
+        if not isvalid(self.ownedScroll) then return end
+        local dir = 0
+        if event.ScrollDelta > 0 then dir = 1 elseif event.ScrollDelta < 0 then dir = -1 end
+        if dir == 0 then return end
+        local actual = self.ownedScroll:GetScrollNormalizedPosition().y
+        -- 최초이거나, 실제값이 내가 세팅한 값에서 크게 벗어났으면(=native 드래그가 움직임) 실제값으로 재동기화 후 누적.
+        --   ⚠ 임계값은 SetScroll 양자화 노이즈(~0.01~0.02)보다 충분히 커야 함(작으면 빠른 연속 휠 누적이 매번 리셋됨).
+        if self.scrollTarget < 0 or math.abs(actual - self.scrollCurrent) > 0.08 then
+            self.scrollTarget = actual
+            self.scrollCurrent = actual
+        end
+        self.scrollTarget = math.max(0, math.min(1, self.scrollTarget - dir * self.ScrollWheelStep))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateWheelScroll(number delta)
+        -- 휠 목표(scrollTarget)로 현재 위치(scrollCurrent)를 감속 보간해 부드럽게 이동. 목표 도달 시 종료.
+        --   (드래그와의 충돌은 무시 가능: 글라이드는 ~0.15초로 짧고, 다음 휠에서 실제 위치로 재초기화하므로.)
+        if self.scrollTarget < 0 then return end
+        if not isvalid(self.ownedScroll) then self.scrollTarget = -1 return end
+        local diff = self.scrollTarget - self.scrollCurrent
+        if math.abs(diff) < 0.003 then
+            self.scrollCurrent = self.scrollTarget
+            self.scrollTarget = -1
+        else
+            self.scrollCurrent = self.scrollCurrent + diff * math.min(1, self.ScrollSmooth * delta)
+        end
+        self.ownedScroll:SetScrollNormalizedPosition(UITransformAxis.Vertical, self.scrollCurrent)
+    end
+
+    @ExecSpace("ClientOnly")
     method void RenderOwnedView()
-        -- 보유 증강 목록 렌더: 행별 아이콘 + 이름 + 단계 + 한 줄 효과(수치 미표기). 미보유 시 안내.
-        --   보유 데이터는 @Sync AugmentsData("key:stage,...") 파싱(GetSyncedAugmentStage 패턴).
+        -- 보유 증강 목록 렌더(스크롤): 템플릿(ownedRowTemplate)을 보유 개수만큼 Clone → ownedScroll이 세로 자동 정렬.
+        --   한 화면 최대 3행 뷰포트(Mask 클리핑), 3개 초과분은 스크롤로 노출. 미보유 시 안내.
+        --   ⚠ 매 프레임 Clone 방지: AugmentsData 변경 시에만 재빌드(GetSyncedAugmentStage로 stage>0 필터).
+        local data = _GameManager.AugmentsData or ""
+        if self.ownedRendered and data == self.ownedRenderData then return end
+        self.ownedRenderData = data
+        self.ownedRendered = true
+
+        -- 기존 Clone 행 전부 제거.
+        if self.ownedRowClones ~= nil then
+            for _, c in ipairs(self.ownedRowClones) do
+                if isvalid(c) then c:Destroy() end
+            end
+        end
+        self.ownedRowClones = {}
+
+        if not isvalid(self.ownedRowTemplate) then return end
         local d = _BlacksmithConfig:GetData()
         local order = d.augmentOrder
-        local row = 0
+        local count = 0
         for _, key in ipairs(order) do
             local stage = _GameManager:GetSyncedAugmentStage(key)
             if stage > 0 then
-                row = row + 1
                 local def = d.augments[key]
-                local rowEntity = self.ownedView:GetChildByName("Row" .. tostring(row), true)
-                if isvalid(rowEntity) and def ~= nil then
-                    rowEntity.Enable = true
-                    local icon = rowEntity:GetChildByName("Icon", false)
-                    if isvalid(icon) and isvalid(icon.SpriteGUIRendererComponent) then
-                        icon.SpriteGUIRendererComponent.ImageRUID = def.icon
+                if def ~= nil then
+                    count = count + 1
+                    self.cloneSeq = self.cloneSeq + 1
+                    -- 템플릿을 같은 부모(OScroll)의 형제로 복제 → 스크롤 레이아웃 대상이 됨.
+                    local clone = self.ownedRowTemplate:Clone("ORow_" .. tostring(self.cloneSeq))
+                    if isvalid(clone) then
+                        clone.Enable = true
+                        local icon = clone:GetChildByName("Icon", false)
+                        if isvalid(icon) and isvalid(icon.SpriteGUIRendererComponent) then
+                            icon.SpriteGUIRendererComponent.ImageRUID = def.icon
+                        end
+                        self:SetChildText(clone, "Name", def.name .. " " .. tostring(stage) .. "단계")
+                        self:SetChildText(clone, "Desc", def.desc)
+                        table.insert(self.ownedRowClones, clone)
                     end
-                    self:SetChildText(rowEntity, "Name", def.name .. " " .. tostring(stage) .. "단계")
-                    self:SetChildText(rowEntity, "Desc", def.desc)
                 end
             end
         end
-        -- 남는 행 숨김.
-        local maxRows = #order
-        for r = row + 1, maxRows do
-            local rowEntity = self.ownedView:GetChildByName("Row" .. tostring(r), true)
-            if isvalid(rowEntity) then rowEntity.Enable = false end
-        end
+
         if isvalid(self.emptyOwnedText) then
-            self.emptyOwnedText.Entity.Enable = row == 0
+            self.emptyOwnedText.Entity.Enable = (count == 0)
         end
+        -- 새 목록은 맨 위(행1)부터 보이도록 스크롤을 상단으로. (VerticalScrollBarDirection=3/TopToBottom 기준 정규화 0.0=상단)
+        if isvalid(self.ownedScroll) then
+            self.ownedScroll:SetScrollNormalizedPosition(UITransformAxis.Vertical, 0.0)
+        end
+        self.scrollTarget = -1        -- 목록 재빌드 시 진행 중 휠 목표 초기화(이전 목록 잔여 방지).
+        self.scrollCurrent = -1
+        log("[AugmentManager] owned rendered count=" .. tostring(count))
     end
 
     method string Comma(integer n)
