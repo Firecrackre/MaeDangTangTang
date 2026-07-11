@@ -6,7 +6,7 @@ script TitleManager extends Logic
     -- 맵 이동은 PlayerComponent:MoveToMapPosition(@ExecSpace("Server"))로 서버에 요청한다(클라→서버 RPC).
 
     property string TargetMapName = "TitleMap"
-    property string NextMapName = "InGameMap"
+    property string NextMapName = "CutSceneMap"
 
     -- UI 참조(UUID는 UIBuilder write({bind})로 주입).
     property Entity titleRoot = "3945432a-ca05-4c0b-83ad-3192a69c7f4d"         -- 그룹 루트(맵 게이팅 시 Enable 토글 대상)

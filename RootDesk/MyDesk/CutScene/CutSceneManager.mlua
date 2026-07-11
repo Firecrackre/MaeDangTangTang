@@ -1,0 +1,457 @@
+@Logic
+script CutSceneManager extends Logic
+    -- 오프닝 컷신 매니저(클라 전용, @Logic).
+    -- CutSceneMap에서만 표시. 클릭마다 컷 하나씩 페이드 인(한 그룹 안에서 누적), 그룹 경계에서 CLEAR(배경만) 후
+    -- 다음 클릭에 다음 그룹 첫 컷 시작. 마지막 컷 다음 클릭 → InGameMap. 우상단 스킵 버튼 3초 홀드 → 스킵.
+    -- RUID/사운드/스케일 여부는 CutSceneConfig 데이터테이블(엑셀)로 구동한다.
+    -- @Logic인 이유: TitleManager/BgmManager와 동일 — 세션 전역, UI 엔티티를 property로 들고 CurrentMapName 폴링 게이팅.
+
+    -- 맵/데이터
+    property string TargetMapName = "CutSceneMap"
+    property string NextMapName = "InGameMap"
+    property string ConfigDataSetName = "CutSceneConfig"
+
+    -- UI 참조(UUID는 UIBuilder write({bind})로 주입)
+    -- 입력은 전역 _InputService ScreenTouch + skipRoot 히트테스트로 처리 → AdvanceBtn/SkipHit 불필요(제거).
+    property Entity cutSceneRoot = "850dd54e-deca-4c90-90b6-bbc1e13f2f02"
+    property Entity panel1 = "13ca9370-76a6-40f6-902a-d5734651b172"
+    property Entity panel2 = "1dc97cc0-f213-4b35-ba8d-2e7999ab9f12"
+    property Entity panel3 = "8dba87e0-a760-4345-9724-f376858d189e"
+    property Entity panel4 = "ad85d24c-72e6-42ef-b934-16f3a23793a4"
+    property Entity panel5 = "37c11273-2437-45bc-b2b3-8ed7a839b89d"
+    property Entity panel6 = "9c77cf5a-1796-4104-967e-55ed3a512512"
+    property Entity skipRoot = "59ca2519-03f4-46cc-9b59-78c50c48eefe"
+    property Entity skipShake = "c591b79b-49b8-42fe-8ef0-84a54300ca49"
+    property Entity skipRing = "c633766a-9797-4395-b53e-cbd307fb28c9"
+
+    -- 연출 튜닝(인스펙터에서 조정 — 은은한 값에서 시작)
+    property number HoldSeconds = 3.0        -- 스킵 홀드 요구 시간(초)
+    property number FadeInSpeed = 2.6        -- 컷 등장 페이드 인 속도(알파/초)
+    property number FadeOutSpeed = 3.2       -- CLEAR 페이드 아웃 속도(알파/초)
+    property number ScaleFrom = 0.94         -- UseScale=1 컷의 시작 스케일(팝)
+    property number ScalePopSpeed = 7.0      -- 스케일 1로 복귀 속도
+    property number ShakeAmp = 3.0           -- 스킵 홀드 흔들림 진폭(px)
+    property number HoverAlphaIdle = 0.4     -- 스킵 버튼 기본 반투명
+    property number HoverAlphaOn = 1.0       -- 스킵 버튼 호버 시 불투명
+    property number HoverLerpSpeed = 9.0     -- 호버 알파 lerp 속도
+    property number RingDecaySpeed = 8.0     -- 릴리스 시 링 감소 속도
+
+    -- 사운드(cutscenesoundlist.md / soundlist.md)
+    property string PageTurnSfxRUID = "a057d99306ad4f36a6bd5502409e89c8"    -- 장 넘어가는 소리(CLEAR)
+    property string SkipConfirmSfxRUID = "69f85d65004541db82615459032e1d4a" -- UI_Click_Confirm(스킵 확정)
+    property number SfxVolume = 1.0
+
+    -- 상태
+    property boolean isActive = false
+    property boolean moving = false
+    property integer stepIndex = 1     -- 다음 실행할 스텝(1-based)
+    property boolean stepsBuilt = false
+    property number hoverAlpha = 0.4
+    property boolean hovering = false
+    property boolean pressing = false
+    property number heldTime = 0
+    property number ringFill = 0
+    property Vector2 skipShakeBase = Vector2(0, 0)
+    property boolean skipBaseCaptured = false
+
+    -- 이벤트 핸들러(EventHandlerBase → any) — 전역 _InputService ScreenTouch 3종
+    property any downHandler = nil
+    property any holdHandler = nil
+    property any releaseHandler = nil
+
+    @ExecSpace("ClientOnly")
+    method void OnBeginPlay()
+        -- 초기 상태: 루트 끔(맵 게이팅 gotcha 회피), 패널 풀/데이터 초기화, 스킵 기준 위치 캡처, 이벤트 배선.
+        self.isActive = false
+        self.moving = false
+        self.stepIndex = 1
+        self.hovering = false
+        self.pressing = false
+        self.heldTime = 0
+        self.ringFill = 0
+        self.hoverAlpha = self.HoverAlphaIdle
+
+        if isvalid(self.cutSceneRoot) then self.cutSceneRoot.Enable = false end
+
+        self:InitPanels()
+        self:LoadScenes()
+
+        if isvalid(self.skipShake) and isvalid(self.skipShake.UITransformComponent) then
+            self.skipShakeBase = self.skipShake.UITransformComponent.anchoredPosition
+            self.skipBaseCaptured = true
+        end
+
+        -- 전역 화면 입력: down=스킵 홀드 시작/컷진행 후보, hold=스킵 이탈 취소, up=컷 진행/홀드 취소.
+        self.downHandler = _InputService:ConnectEvent(ScreenTouchEvent, self.OnScreenDown)
+        self.holdHandler = _InputService:ConnectEvent(ScreenTouchHoldEvent, self.OnScreenHold)
+        self.releaseHandler = _InputService:ConnectEvent(ScreenTouchReleaseEvent, self.OnScreenUp)
+
+        self:ApplySkipVisuals()
+        log("[CutScene] ready.")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnEndPlay()
+        -- 연결한 모든 이벤트 해제(필수).
+        if self.downHandler ~= nil then _InputService:DisconnectEvent(ScreenTouchEvent, self.downHandler) end
+        if self.holdHandler ~= nil then _InputService:DisconnectEvent(ScreenTouchHoldEvent, self.holdHandler) end
+        if self.releaseHandler ~= nil then _InputService:DisconnectEvent(ScreenTouchReleaseEvent, self.releaseHandler) end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnUpdate(number delta)
+        -- 맵 게이팅: CutSceneMap일 때만 표시. 진입 상승에지에서 리셋.
+        local lp = _UserService.LocalPlayer
+        local onMap = isvalid(lp) and lp.CurrentMapName == self.TargetMapName
+        if onMap ~= self.isActive then
+            self.isActive = onMap
+            if isvalid(self.cutSceneRoot) then self.cutSceneRoot.Enable = onMap end
+            if onMap then self:ResetCutscene() end
+        end
+        if not onMap then return end
+
+        self:UpdatePanels(delta)
+        self:UpdateSkip(delta)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void InitPanels()
+        -- 패널 풀 배열 구성 + 전부 숨김/알파0/스케일1.
+        self._T.panels = { self.panel1, self.panel2, self.panel3, self.panel4, self.panel5, self.panel6 }
+        self._T.pAlpha = {}
+        self._T.pTarget = {}
+        self._T.pActive = {}
+        self._T.pScale = {}
+        self._T.pScaleTarget = {}
+        self._T.panelCursor = 0
+        for i, p in ipairs(self._T.panels) do
+            self._T.pAlpha[i] = 0
+            self._T.pTarget[i] = 0
+            self._T.pActive[i] = false
+            self._T.pScale[i] = 1
+            self._T.pScaleTarget[i] = 1
+            if isvalid(p) then
+                p.Enable = false
+                if isvalid(p.SpriteGUIRendererComponent) then
+                    p.SpriteGUIRendererComponent.Color = Color(1, 1, 1, 0)
+                end
+                if isvalid(p.UITransformComponent) then
+                    p.UITransformComponent.UIScale = Vector3(1, 1, 1)
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void LoadScenes()
+        -- CutSceneConfig에서 씬 목록 로드 → 그룹/씬 정렬 → 스텝 리스트(REVEAL/CLEAR/FINISH) 빌드.
+        self._T.scenes = {}
+        self._T.steps = {}
+        self.stepsBuilt = false
+        local ds = _DataService:GetTable(self.ConfigDataSetName)
+        if ds == nil then
+            log_error("[CutScene] dataset nil: " .. self.ConfigDataSetName)
+            return
+        end
+        local n = ds:GetRowCount()
+        for i = 1, n do
+            local ruid = ds:GetCell(i, "RUID")
+            if ruid ~= nil and ruid ~= "" then
+                local sc = {
+                    key = ds:GetCell(i, "key"),
+                    g = tonumber(ds:GetCell(i, "GroupIndex")) or 0,
+                    s = tonumber(ds:GetCell(i, "SceneIndex")) or 0,
+                    ruid = ruid,
+                    useScale = (tonumber(ds:GetCell(i, "UseScale")) or 0) >= 1,
+                    snd = ds:GetCell(i, "SoundRUID"),
+                }
+                table.insert(self._T.scenes, sc)
+            end
+        end
+        table.sort(self._T.scenes, function(a, b)
+            if a.g ~= b.g then return a.g < b.g end
+            return a.s < b.s
+        end)
+        local prevG = nil
+        for _, sc in ipairs(self._T.scenes) do
+            if prevG ~= nil and sc.g ~= prevG then
+                table.insert(self._T.steps, { kind = "clear" })
+            end
+            table.insert(self._T.steps, { kind = "reveal", scene = sc })
+            prevG = sc.g
+        end
+        table.insert(self._T.steps, { kind = "finish" })
+        self.stepsBuilt = true
+        log("[CutScene] scenes=" .. tostring(#self._T.scenes) .. " steps=" .. tostring(#self._T.steps))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ResetCutscene()
+        -- 컷신 진입 리셋: 배경만, 스텝 처음, 패널 숨김, 스킵 리셋.
+        self.stepIndex = 1
+        self.moving = false
+        self.pressing = false
+        self.heldTime = 0
+        self.ringFill = 0
+        self.hovering = false
+        self.hoverAlpha = self.HoverAlphaIdle
+        if not self.stepsBuilt then self:LoadScenes() end
+        self:InitPanels()
+        self:RestSkip()
+        self:ApplySkipVisuals()
+        log("[CutScene] enter -> reset (background only)")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void DoStep()
+        -- 현재 stepIndex의 스텝을 실행하고 인덱스 전진(finish는 전진 없이 맵 이동).
+        if self._T.steps == nil then return end
+        local step = self._T.steps[self.stepIndex]
+        if step == nil then return end
+        if step.kind == "reveal" then
+            self:RevealScene(step.scene)
+            self.stepIndex = self.stepIndex + 1
+        elseif step.kind == "clear" then
+            self:ClearPanels()
+            self.stepIndex = self.stepIndex + 1
+        elseif step.kind == "finish" then
+            self:GoNextMap()
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void RevealScene(any scene)
+        -- 다음 패널 슬롯에 컷 이미지 세팅 후 페이드 인(+옵션 스케일 팝 +컷별 사운드).
+        self._T.panelCursor = self._T.panelCursor + 1
+        local i = self._T.panelCursor
+        local p = self._T.panels[i]
+        if not isvalid(p) then
+            log_warning("[CutScene] no panel slot for cursor " .. tostring(i))
+            return
+        end
+        if isvalid(p.SpriteGUIRendererComponent) then
+            p.SpriteGUIRendererComponent.ImageRUID = scene.ruid
+            p.SpriteGUIRendererComponent.Color = Color(1, 1, 1, 0)
+        end
+        p.Enable = true
+        self._T.pActive[i] = true
+        self._T.pAlpha[i] = 0
+        self._T.pTarget[i] = 1
+        if scene.useScale then
+            self._T.pScale[i] = self.ScaleFrom
+        else
+            self._T.pScale[i] = 1
+        end
+        self._T.pScaleTarget[i] = 1
+        if isvalid(p.UITransformComponent) then
+            p.UITransformComponent.UIScale = Vector3(self._T.pScale[i], self._T.pScale[i], 1)
+        end
+        if scene.snd ~= nil and scene.snd ~= "" then
+            _SoundService:PlaySound(scene.snd, self.SfxVolume)
+        end
+        log("[CutScene] reveal " .. tostring(scene.key) .. " slot=" .. tostring(i))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ClearPanels()
+        -- 현재 활성 패널 전부 페이드 아웃(완료 시 UpdatePanels가 Enable=false) + 커서 리셋 + 장 넘김음.
+        if self._T.panels ~= nil then
+            for i, p in ipairs(self._T.panels) do
+                if self._T.pActive[i] then self._T.pTarget[i] = 0 end
+            end
+        end
+        self._T.panelCursor = 0
+        if self.PageTurnSfxRUID ~= nil and self.PageTurnSfxRUID ~= "" then
+            _SoundService:PlaySound(self.PageTurnSfxRUID, self.SfxVolume)
+        end
+        log("[CutScene] clear (page turn)")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdatePanels(number delta)
+        -- 패널별 알파/스케일을 목표값으로 lerp. 페이드아웃 완료 시 비활성.
+        if self._T.panels == nil then return end
+        for i, p in ipairs(self._T.panels) do
+            if isvalid(p) then
+                local a = self._T.pAlpha[i]
+                local t = self._T.pTarget[i]
+                if a ~= t then
+                    if t > a then
+                        a = math.min(t, a + self.FadeInSpeed * delta)
+                    else
+                        a = math.max(t, a - self.FadeOutSpeed * delta)
+                    end
+                    self._T.pAlpha[i] = a
+                    if isvalid(p.SpriteGUIRendererComponent) then
+                        p.SpriteGUIRendererComponent.Color = Color(1, 1, 1, a)
+                    end
+                    if a <= 0.001 and t <= 0 then
+                        p.Enable = false
+                        self._T.pActive[i] = false
+                    end
+                end
+                local sc = self._T.pScale[i]
+                local st = self._T.pScaleTarget[i]
+                if sc ~= st then
+                    if st > sc then
+                        sc = math.min(st, sc + self.ScalePopSpeed * delta)
+                    else
+                        sc = math.max(st, sc - self.ScalePopSpeed * delta)
+                    end
+                    self._T.pScale[i] = sc
+                    if isvalid(p.UITransformComponent) then
+                        p.UITransformComponent.UIScale = Vector3(sc, sc, 1)
+                    end
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnScreenDown(ScreenTouchEvent event)
+        -- 화면 누름: 스킵 버튼 위면 홀드 시작, 아니면 컷 진행 후보로 기록.
+        if not self.isActive then return end
+        local overSkip = self:IsOverSkip(event.TouchPoint)
+        self._T.downWasSkip = overSkip
+        if overSkip and not self.moving then
+            self.pressing = true
+            self.heldTime = 0
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnScreenHold(ScreenTouchHoldEvent event)
+        -- 누르는 중 커서가 스킵 버튼 밖으로 나가면 홀드 취소.
+        if not self.isActive then return end
+        if self.pressing and not self:IsOverSkip(event.TouchPoint) then
+            self.pressing = false
+            self.heldTime = 0
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnScreenUp(ScreenTouchReleaseEvent event)
+        -- 뗌: 홀드 중이면 취소(3초 전=리셋). 스킵이 아니고 시스템 UI 위가 아니면 컷 1개 진행.
+        if not self.isActive then return end
+        local wasSkip = self._T.downWasSkip == true
+        self._T.downWasSkip = false
+        if self.pressing then
+            self.pressing = false
+            self.heldTime = 0
+        end
+        if self.moving then return end
+        if wasSkip then return end
+        if _InputService:IsPointerOverUI() then return end  -- 우상단 시스템 버튼 등 클릭 시 컷 진행 안 함
+        self:DoStep()
+    end
+
+    @ExecSpace("ClientOnly")
+    method boolean IsOverSkip(Vector2 screenPt)
+        -- 스킵 버튼(skipRoot) 사각형 히트테스트 — ScratchTicket IsCursorOverFoil 패턴.
+        --   ⚠ 스킵 버튼은 레이캐스트 대상이 아니라 UITouch가 안 온다 → 좌표변환으로 직접 판정.
+        --   ScreenToWorldPosition(게임월드)와 LocalUIToWorldPosition(게임월드)을 짝지어야 함(두 좌표공간 gotcha).
+        if not isvalid(self.skipRoot) or not isvalid(self.skipRoot.UITransformComponent) then return false end
+        local ui = self.skipRoot.UITransformComponent
+        local worldPt = _UILogic:ScreenToWorldPosition(screenPt)
+        local rs = ui.RectSize
+        -- ⚠ LocalUIToWorldPosition의 로컬 원점은 CENTER가 아니라 PIVOT이다. skipRoot 피벗=(1,1)이라
+        --   ±RectSize/2로 코너를 잡으면 히트영역이 버튼 절반만큼 우상단으로 밀린다. 피벗 인지 코너로 계산.
+        local px = ui.Pivot.x
+        local py = ui.Pivot.y
+        local bl = _UILogic:LocalUIToWorldPosition(Vector2(-px * rs.x, -py * rs.y), ui)
+        local tr = _UILogic:LocalUIToWorldPosition(Vector2((1 - px) * rs.x, (1 - py) * rs.y), ui)
+        local w = tr.x - bl.x
+        local h = tr.y - bl.y
+        if w == 0 or h == 0 then return false end
+        local u = (worldPt.x - bl.x) / w
+        local v = (worldPt.y - bl.y) / h
+        return u >= 0 and u <= 1 and v >= 0 and v <= 1
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateSkip(number delta)
+        -- 호버(스킵 위 커서 폴링)→불투명 / 홀드 중 링 채움 + 흔들림 / 릴리스 시 링 감소.
+        self.hovering = self:IsOverSkip(_InputService:GetCursorPosition())
+        local targetAlpha = self.HoverAlphaIdle
+        if self.hovering or self.pressing then targetAlpha = self.HoverAlphaOn end
+        self.hoverAlpha = self:Approach(self.hoverAlpha, targetAlpha, self.HoverLerpSpeed * delta)
+
+        if self.pressing then
+            self.heldTime = self.heldTime + delta
+            local frac = self.heldTime / self.HoldSeconds
+            if frac > 1 then frac = 1 end
+            self.ringFill = frac
+            self:ShakeSkip()
+            if self.heldTime >= self.HoldSeconds then
+                self:DoSkip()
+                return
+            end
+        else
+            self.ringFill = math.max(0, self.ringFill - self.RingDecaySpeed * delta)
+            self:RestSkip()
+        end
+        self:ApplySkipVisuals()
+    end
+
+    @ExecSpace("ClientOnly")
+    method number Approach(number cur, number target, number step)
+        -- cur를 target 방향으로 step만큼 접근(오버슈트 방지).
+        if cur < target then return math.min(target, cur + step) end
+        if cur > target then return math.max(target, cur - step) end
+        return cur
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ShakeSkip()
+        -- 스킵 시각 묶음(SkipShake)을 기준 위치 주변으로 지터(부들부들). 히트 판정(skipRoot)은 고정.
+        if self.skipBaseCaptured and isvalid(self.skipShake) and isvalid(self.skipShake.UITransformComponent) then
+            local jx = (_UtilLogic:RandomDouble() - 0.5) * 2 * self.ShakeAmp
+            local jy = (_UtilLogic:RandomDouble() - 0.5) * 2 * self.ShakeAmp
+            self.skipShake.UITransformComponent.anchoredPosition = Vector2(self.skipShakeBase.x + jx, self.skipShakeBase.y + jy)
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void RestSkip()
+        -- 스킵 시각 묶음을 기준 위치로 복귀.
+        if self.skipBaseCaptured and isvalid(self.skipShake) and isvalid(self.skipShake.UITransformComponent) then
+            self.skipShake.UITransformComponent.anchoredPosition = self.skipShakeBase
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ApplySkipVisuals()
+        -- 호버 알파(CanvasGroup) + 링 채움(FillAmount) 반영.
+        if isvalid(self.skipRoot) and isvalid(self.skipRoot.CanvasGroupComponent) then
+            self.skipRoot.CanvasGroupComponent.GroupAlpha = self.hoverAlpha
+        end
+        if isvalid(self.skipRing) and isvalid(self.skipRing.SpriteGUIRendererComponent) then
+            self.skipRing.SpriteGUIRendererComponent.FillAmount = self.ringFill
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void DoSkip()
+        -- 홀드 완료 → 확정음 + 다음 맵.
+        if self.moving then return end
+        self.pressing = false
+        if self.SkipConfirmSfxRUID ~= nil and self.SkipConfirmSfxRUID ~= "" then
+            _SoundService:PlaySound(self.SkipConfirmSfxRUID, self.SfxVolume)
+        end
+        log("[CutScene] SKIP hold complete -> " .. self.NextMapName)
+        self:GoNextMap()
+    end
+
+    @ExecSpace("ClientOnly")
+    method void GoNextMap()
+        -- InGameMap으로 이동(서버 RPC). 중복 가드.
+        if self.moving then return end
+        local lp = _UserService.LocalPlayer
+        if not isvalid(lp) then return end
+        local pc = lp.PlayerComponent
+        if not isvalid(pc) then return end
+        self.moving = true
+        log("[CutScene] move -> " .. self.NextMapName)
+        pc:MoveToMapPosition(self.NextMapName, Vector2(0, 0))
+    end
+end

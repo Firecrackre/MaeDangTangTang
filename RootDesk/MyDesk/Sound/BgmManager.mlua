@@ -8,8 +8,10 @@ script BgmManager extends Logic
     --   PlayBGM 재호출 시맨틱이 문서에 없어 매 프레임 호출은 금지 — 반드시 아래 2중 에지(맵 변화 + BGM RUID 변화)로만 호출한다.
 
     property string TitleMapName = "TitleMap"
+    property string CutSceneMapName = "CutSceneMap"                       -- 오프닝 컷신 맵
     property string TitleBgmRUID = "3def13e49e10434282979764c612440a"     -- BGM: 타이틀 화면
     property string GameplayBgmRUID = "bbbf2616f2064d658f4d53af5faf9d3e"  -- BGM: 메인 게임플레이
+    property string CutSceneBgmRUID = "cdb02b5abcd646a19a2254d0628a9f0a"  -- BGM: 컷신(cutscenesoundlist.md)
     property number BgmVolume = 0.6
 
     property string lastMapName = ""   -- 마지막으로 관측한 맵 이름(미관측 센티널 = "")
@@ -27,11 +29,15 @@ script BgmManager extends Logic
 
         local target = self.GameplayBgmRUID
         if mapName == self.TitleMapName then target = self.TitleBgmRUID end
+        if mapName == self.CutSceneMapName then target = self.CutSceneBgmRUID end  -- 컷신 맵 전용 BGM
         if target == self.currentBgm then return end   -- 맵은 바뀌었지만 같은 BGM(그 외 맵→그 외 맵)이면 유지
 
         if self.currentBgm ~= "" then _SoundService:StopBGM(true) end
         _SoundService:PlayBGM(target, self.BgmVolume)
         self.currentBgm = target
-        log("[Bgm] map=" .. mapName .. " -> " .. (target == self.TitleBgmRUID and "title" or "gameplay"))
+        local label = "gameplay"
+        if target == self.TitleBgmRUID then label = "title" end
+        if target == self.CutSceneBgmRUID then label = "cutscene" end
+        log("[Bgm] map=" .. mapName .. " -> " .. label)
     end
 end
