@@ -467,6 +467,9 @@ script ScratchTicketManager extends Component
     method void SetCubeSelectShown(boolean shown, boolean instant)
         -- 큐브 구매창 노출/숨김 목표 설정. shown=true면 노출 위치(baseX)로, false면 보드 뒤(baseX+offset)로 슬라이드.
         -- instant=true면 즉시 스냅(진입/이탈 게이팅). 노출 시작 시 Enable=true, 숨김 도달 시 Enable=false.
+        -- 5/5(상환 미납)이면 큐브 구매창을 절대 노출하지 않는다(판매만 가능). 판매 버튼은 Board 소속이라 영향 없음.
+        --   모든 노출 경로(진입/대기/공개완료)를 이 한 곳에서 차단한다.
+        if shown and _GameManager.IsRepaymentDue then shown = false end
         if not isvalid(self.cubeSelect) or not isvalid(self.cubeSelect.UITransformComponent) then return end
         if not self.cubeBaseCaptured then
             self.cubeSelectBaseX = self.cubeSelect.UITransformComponent.anchoredPosition.x
@@ -1067,7 +1070,7 @@ script ScratchTicketManager extends Component
         -- 최종 판매가로 카운트업(서버 CurrentPrice가 SSOT — per-line 누적치엔 등급 배수가 없으므로 여기서 확정).
         self:StartPriceScroll(_GameManager.CurrentPrice)
         -- 3줄 공개 완료 → 좌측 구매창을 다시 슬라이드 아웃(노출). 큐브 아이콘 클릭으로 재굴림 가능.
-        -- (5/5 상환 미납이면 구매창은 나오되 RefreshCubeLock이 큐브 잠금 — 판매만 가능.)
+        -- (5/5 상환 미납이면 SetCubeSelectShown 게이트가 노출을 막아 구매창이 안 나오고 판매만 가능.)
         self:SetCubeSelectShown(true, false)
         self:SetButtonEnabled(self.sellButton, true)
         log("[ScratchTicket] all revealed -> price=" .. tostring(_GameManager.CurrentPrice)
@@ -1229,15 +1232,17 @@ script ScratchTicketManager extends Component
 
     @ExecSpace("ClientOnly")
     method void RefreshCubeLock()
-        -- 5/5(상환 미납) 잠금 적용: 큐브 선택 4개(아이콘+구매 버튼) 비활성 → 재굴림 불가, 판매만 가능.
-        -- 해제 시 큐브 버튼 복원.
+        -- 5/5(상환 미납) 잠금 적용: 큐브 구매창 자체를 숨긴다(판매만 가능). 안쪽 버튼 dim은 슬라이드-아웃 짧은 순간의 방어.
+        -- 해제 시 큐브 버튼 복원(구매창 재노출은 상태 흐름이 처리 — 여기선 dim만 되돌림).
         local locked = _GameManager.IsRepaymentDue
         self:SetButtonEnabled(self.cubeIconWeird, not locked)
         self:SetButtonEnabled(self.cubeIconMaster, not locked)
         self:SetButtonEnabled(self.weirdBuyButton, not locked)
         self:SetButtonEnabled(self.masterBuyButton, not locked)
         if locked then
-            log("[ScratchTicket] 5/5 repayment due -> cube buttons locked (sell only)")
+            -- 구매창을 보드 뒤로 슬라이드시켜 완전히 숨김(에지에서 이미 노출돼 있던 경우 대비). SetCubeSelectShown 게이트와 정합.
+            self:SetCubeSelectShown(false, false)
+            log("[ScratchTicket] 5/5 repayment due -> cube panel hidden (sell only)")
         end
     end
 
