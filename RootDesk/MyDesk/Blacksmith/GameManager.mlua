@@ -67,6 +67,8 @@ script GameManager extends Logic
     -- 획득 시 제시하는 3택 선택지(key CSV) + 대기 여부. 선택 전까지 유지.
     property string AugmentChoicesData = ""
     property boolean IsAugmentPending = false
+    -- 증강 '재활용 전문가' 발동 누적 횟수. 클라(HudManager)가 증가 에지를 감지해 시계 되감기 연출을 재생.
+    property integer RecycleProcCount = 0
 
     -- ── 재정 관리: 메소 대출 (finance_management.md) ──
     property integer LoanUseCount = 0      -- 사용한 대출 횟수
@@ -172,6 +174,7 @@ script GameManager extends Logic
             AugmentsData = "",
             AugmentChoicesData = "",
             IsAugmentPending = false,
+            RecycleProcCount = 0,
             LoanUseCount = 0,
             CanLoan = false,
             Debt = 0,
@@ -244,6 +247,7 @@ script GameManager extends Logic
             AugmentsData = s.AugmentsData,
             AugmentChoicesData = s.AugmentChoicesData,
             IsAugmentPending = s.IsAugmentPending,
+            RecycleProcCount = s.RecycleProcCount,
             LoanUseCount = s.LoanUseCount,
             CanLoan = s.CanLoan,
             Debt = s.Debt,
@@ -283,6 +287,7 @@ script GameManager extends Logic
         self.AugmentsData = state.AugmentsData
         self.AugmentChoicesData = state.AugmentChoicesData
         self.IsAugmentPending = state.IsAugmentPending
+        self.RecycleProcCount = state.RecycleProcCount
         self.LoanUseCount = state.LoanUseCount
         self.CanLoan = state.CanLoan
         self.Debt = state.Debt
@@ -496,9 +501,10 @@ script GameManager extends Logic
         -- 잠재 결과(등급+옵션 3줄)를 미러 문자열로 직렬화한다(클라 스크래치 UI가 파싱해 표시).
         --   포맷: "cubeCount;grade;line;line;line", line = "label|value|unit|optionType|isBonus|isDestroy|isValid|bonus".
         --   맨 앞 cubeCount는 매 큐브 사용마다 값이 달라지게 해 클라가 동일 결과 재추첨도 변화로 감지하게 한다.
+        --     재활용 전문가 발동 시 CubeUseCount가 안 오르므로 RecycleProcCount를 합산해 항상 증가시킨다(클라는 이 값 버림).
         --   isValid는 주요 옵션의 장비 유효성(서버 판정). 비주요(잡옵/파괴)는 0.
         --   bonus는 이 줄이 판매가에 더하는 옵션 보너스(서버 권위, GetOptionBonus). 클라는 이 값으로 실시간 판매가를 올린다.
-        local parts = { tostring(s.CubeUseCount), pr.grade }
+        local parts = { tostring(s.CubeUseCount + s.RecycleProcCount), pr.grade }
         for _, o in ipairs(pr.options) do
             local isValid = 0
             if o.optionType == "Main" and _BlacksmithConfig:IsValidMain(s.CurrentItemId, o.optionName) then
@@ -853,20 +859,34 @@ script GameManager extends Logic
             return
         end
 
+        -- 증강 '재활용 전문가': 큐브 사용 시 단계별 확률(10/20/35%)로 사용 횟수 차감 방지. (blacksmith_upgrade.md §6)
+        --   메소는 정상 차감(유저 확정), 잠재도 정상 재설정 — 시계 카운트·상환 트리거만 오르지 않는다.
+        local recyclePct = self:GetAugmentStageValueOf(s, "recycleExpert")
+        local recycled = recyclePct > 0 and _UtilLogic:RandomIntegerRange(1, 100) <= recyclePct
+
         -- 비용 차감 + 큐브 사용 횟수 1 증가 (flow §7-4·5).
         -- '한 번 더 사용하기' 시 기존 잠재/판매가는 새 결과로 덮어쓴다 (flow §13).
         s.Meso = s.Meso - cost
-        s.CubeUseCount = s.CubeUseCount + 1
+        if recycled then
+            -- 발동: 횟수 미증가 + 상환 경계 판정 스킵(카운트 불변인데 % 판정을 다시 타면 재상환 버그).
+            --   RecycleProcCount 증가 에지를 클라(HudManager)가 감지해 시계 되감기 연출을 재생한다.
+            s.RecycleProcCount = s.RecycleProcCount + 1
+            log(self:Tag(s) .. "recycleExpert proc! (" .. tostring(recyclePct)
+                .. "%) cube count kept at " .. tostring(s.CubeUseCount)
+                .. ", procTotal=" .. tostring(s.RecycleProcCount))
+        else
+            s.CubeUseCount = s.CubeUseCount + 1
 
-        -- 상환 주기(기본 5회) 경계 도달 시 상환 예정 상태로 전환 (concept §6-3, flow §15).
-        -- 실제 차감/게임오버는 RequestSettleDebt에서 처리(스크래치 결과 완료 후 호출).
-        if s.CubeUseCount % d.debtCycle == 0 then
-            local stage = s.CubeUseCount // d.debtCycle
-            s.IsRepaymentDue = true
-            -- 위험 거래(이자 증가)를 반영한 실효 상환금. 대출 빚(s.Debt)은 상환 시점에 별도 합산. (Phase 8·9)
-            s.PendingRepayment = self:ComputeRepaymentOf(s, stage)
-            log(self:Tag(s) .. "repayment DUE: stage=" .. tostring(stage)
-                .. ", amount=" .. tostring(s.PendingRepayment))
+            -- 상환 주기(기본 5회) 경계 도달 시 상환 예정 상태로 전환 (concept §6-3, flow §15).
+            -- 실제 차감/게임오버는 RequestSettleDebt에서 처리(스크래치 결과 완료 후 호출).
+            if s.CubeUseCount % d.debtCycle == 0 then
+                local stage = s.CubeUseCount // d.debtCycle
+                s.IsRepaymentDue = true
+                -- 위험 거래(이자 증가)를 반영한 실효 상환금. 대출 빚(s.Debt)은 상환 시점에 별도 합산. (Phase 8·9)
+                s.PendingRepayment = self:ComputeRepaymentOf(s, stage)
+                log(self:Tag(s) .. "repayment DUE: stage=" .. tostring(stage)
+                    .. ", amount=" .. tostring(s.PendingRepayment))
+            end
         end
         self:UpdateRepaymentCountdown(s)
 

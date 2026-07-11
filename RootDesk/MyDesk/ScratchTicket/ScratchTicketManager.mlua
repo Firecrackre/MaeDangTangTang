@@ -251,6 +251,9 @@ script ScratchTicketManager extends Component
 
     -- 버튼별 저작 알파(투명 배경 버튼을 SetButtonEnabled이 흰색으로 덮지 않도록 기준값 보존). {[buttonEntity]=alpha}
     property any buttonBaseAlpha = nil
+    -- 버튼 라벨(TextComponent) 저작 알파 — 비활성 시 글자/외곽선도 배경과 같이 흐려지게(복원용 기준값). {[buttonEntity]=alpha}
+    property any buttonBaseFontAlpha = nil
+    property any buttonBaseOutlineAlpha = nil
 
     -- 증강 '귀한 태생' 단계 추적(레벨 구동) — 변화 시 큐브 가격 라벨 재세팅. -1 = 미초기화.
     property integer lastCubeCostStage = -1
@@ -340,9 +343,16 @@ script ScratchTicketManager extends Component
         -- 각 버튼의 저작 알파 캡처(투명 배경 버튼을 SetButtonEnabled이 흰색으로 덮지 않도록 기준값 보존).
         --   ⚠ ResetToWaiting/SetButtonEnabled 호출 이전 시점이라 저작값이 온전하다.
         self.buttonBaseAlpha = {}
+        self.buttonBaseFontAlpha = {}
+        self.buttonBaseOutlineAlpha = {}
         for _, e in ipairs({ self.sellButton, self.cubeIconWeird, self.cubeIconMaster, self.weirdBuyButton, self.masterBuyButton }) do
             if isvalid(e) and isvalid(e.SpriteGUIRendererComponent) then
                 self.buttonBaseAlpha[e] = e.SpriteGUIRendererComponent.Color.a
+            end
+            -- 라벨이 버튼 엔티티 자신의 TextComponent에 있음(자식 아님) → 저작 알파 캡처(비활성 복원용).
+            if isvalid(e) and isvalid(e.TextComponent) then
+                self.buttonBaseFontAlpha[e] = e.TextComponent.FontColor.a
+                self.buttonBaseOutlineAlpha[e] = e.TextComponent.OutlineColor.a
             end
         end
 
@@ -2132,6 +2142,17 @@ script ScratchTicketManager extends Component
             local base = (self.buttonBaseAlpha ~= nil and self.buttonBaseAlpha[e]) or 1.0
             local c = spr.Color
             spr.Color = Color(c.r, c.g, c.b, enabled and base or (base * 0.35))
+        end
+        -- 라벨 글자/외곽선도 배경과 동일 배수(×0.35)로 흐리게 → 비활성 시 버튼 전체가 하나로 페이드.
+        --   (외곽선까지 낮춰야 알파만 낮춘 글자가 검은 외곽선만 남는 부작용을 막는다.)
+        local txt = e.TextComponent
+        if isvalid(txt) then
+            local fbase = (self.buttonBaseFontAlpha ~= nil and self.buttonBaseFontAlpha[e]) or 1.0
+            local fc = txt.FontColor
+            txt.FontColor = Color(fc.r, fc.g, fc.b, enabled and fbase or (fbase * 0.35))
+            local obase = (self.buttonBaseOutlineAlpha ~= nil and self.buttonBaseOutlineAlpha[e]) or 1.0
+            local oc = txt.OutlineColor
+            txt.OutlineColor = Color(oc.r, oc.g, oc.b, enabled and obase or (obase * 0.35))
         end
     end
 
