@@ -26,9 +26,11 @@ script FinanceManager extends Logic
     property TextComponent infoUsesText = "ba11fc43-a502-4bb8-9337-d40e89beb842"   -- 남은 대출 횟수
     property SpriteGUIRendererComponent npcSprite = "35fccbeb-5531-4120-9b5f-546fe3ae3342" -- 노인 NPC(런타임 thumbnail:// 설정)
 
-    -- 사운드(ui-sound.md 기본 클릭 + msw-search UI 오류음).
-    property string clickSoundRUID = "972843e759204d3e9ad84e7d3fa94f83"
-    property string errorSoundRUID = "174d501eccd04eadbd6c6411d4ade7e7"
+    -- 사운드(docs/specs/soundlist.md).
+    property string clickSoundRUID = "b2b0b752bf914fb5abd885470c84c8fc"   -- UI_Click_Default: 대출하기(팝업 열기)
+    property string lightSoundRUID = "0868b0f43f1949c1ace06ae4fa33ee55"   -- UI_Click_Light: 닫기/취소
+    property string confirmSoundRUID = "69f85d65004541db82615459032e1d4a" -- UI_Click_Confirm: 대출 실행 확정
+    property string errorSoundRUID = "174d501eccd04eadbd6c6411d4ade7e7"   -- 잠금(대출 소진) 오류음(msw-search)
     property number sfxVolume = 1.0
 
     -- 내부 상태.
@@ -193,7 +195,7 @@ script FinanceManager extends Logic
     @ExecSpace("ClientOnly")
     method void OnCloseClicked()
         -- X 버튼 → 페이지 닫기.
-        _SoundService:PlaySound(self.clickSoundRUID, self.sfxVolume)
+        _SoundService:PlaySound(self.lightSoundRUID, self.sfxVolume)
         self:Close()
     end
 
@@ -207,7 +209,7 @@ script FinanceManager extends Logic
     @ExecSpace("ClientOnly")
     method void OnConfirmLoan()
         -- 대출받기(A/B 공통) → 서버 대출 요청. 성공(LoanUseCount 증가)은 OnUpdate가 감지해 자동으로 닫는다.
-        _SoundService:PlaySound(self.clickSoundRUID, self.sfxVolume)
+        _SoundService:PlaySound(self.confirmSoundRUID, self.sfxVolume)
         if isvalid(self.confirmGroup) then self.confirmGroup.Enable = false end
         _GameManager:RequestLoan()
     end
@@ -215,7 +217,7 @@ script FinanceManager extends Logic
     @ExecSpace("ClientOnly")
     method void OnCancelConfirm()
         -- 취소 → 확인 팝업만 닫는다(대출 실행 안 함). 재정 페이지는 그대로 유지.
-        _SoundService:PlaySound(self.clickSoundRUID, self.sfxVolume)
+        _SoundService:PlaySound(self.lightSoundRUID, self.sfxVolume)
         if isvalid(self.confirmGroup) then self.confirmGroup.Enable = false end
     end
 

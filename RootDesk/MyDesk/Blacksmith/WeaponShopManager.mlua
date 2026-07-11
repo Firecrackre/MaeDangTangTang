@@ -39,6 +39,16 @@ script WeaponShopManager extends Logic
 
 	property string SfxFanfare = "cb270655c69841aabb02b11de9f8a8be"
 
+	-- 슬롯머신 스핀 루프음(공개 전 드르르륵 대기음, 마지막 슬롯 정지 시 멈춤). docs/specs/soundlist.md
+	property string SfxRevealLoop = "7c73a090bd1d4bfe8fb860b2ad44031d"
+	property number SfxRevealLoopVolume = 0.8
+	property boolean reelLoopOn = false
+
+	-- UI 클릭음(soundlist.md).
+	property string SfxClickDefault = "b2b0b752bf914fb5abd885470c84c8fc"  -- 슬롯 선택/새로고침
+	property string SfxClickLight   = "0868b0f43f1949c1ace06ae4fa33ee55"  -- 로비로 돌아가기
+	property string SfxClickBuy     = "69f85d65004541db82615459032e1d4a"  -- 무기 구입 확정
+
 	property Entity board = "cf3969b5-ae1b-4ca2-961a-cd8d26c03f09"
 
 	property SpriteGUIRendererComponent detailIcon = "3c3a5507-9c1c-45b4-8f4e-ac75002df790"
@@ -221,6 +231,7 @@ script WeaponShopManager extends Logic
 		        if self.backHandler ~= nil and isvalid(self.backButton) then
 		            self.backButton.Entity:DisconnectEvent(ButtonClickEvent, self.backHandler)
 		        end
+		        _SoundService:StopSound(self.SfxRevealLoop)   -- 릴 대기음 안전망 정지.
 	end
 
 	@ExecSpace("ClientOnly")
@@ -323,6 +334,7 @@ script WeaponShopManager extends Logic
 		        end
 
 		        self.spinning = true
+		        self:SetReelLoop(true)   -- 릴 회전 대기음 시작(빈 상점 early return 뒤라 실제 스핀 시에만)
 		        self.spinTime = 0
 		        self.augChangedDuringSpin = false
 		        self.spinSlots = {}
@@ -423,11 +435,24 @@ script WeaponShopManager extends Logic
 		        end
 		        if allStopped then
 		            self.spinning = false
+		            self:SetReelLoop(false)   -- 마지막 슬롯 정지 → 대기음 정지
 		            if self.augChangedDuringSpin then
 		                -- 스핀 중 증강이 바뀌었으면(이론상 드묾) 최신 실효 구매가로 일괄 재렌더.
 		                self:RenderShop(self.lastShopData)
 		            end
 		            log("[Spin] done")
+		        end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SetReelLoop(boolean on)
+		        -- 릴 회전 대기음 시작/정지(플래그 디듀프 — PlayLoopSound 중첩 방지).
+		        if on == self.reelLoopOn then return end
+		        self.reelLoopOn = on
+		        if on then
+		            _SoundService:PlayLoopSound(self.SfxRevealLoop, self.SfxRevealLoopVolume)
+		        else
+		            _SoundService:StopSound(self.SfxRevealLoop)
 		        end
 	end
 
@@ -448,6 +473,7 @@ script WeaponShopManager extends Logic
 		            end
 		        end
 		        self.spinning = false
+		        self:SetReelLoop(false)   -- 스핀 중 화면/맵 이탈 → 대기음 즉시 정지
 		        self:ResetFXEntities()
 		        log("[Spin] finished instantly (shop hidden)")
 	end
@@ -686,6 +712,7 @@ script WeaponShopManager extends Logic
 		        -- 슬롯 클릭 → 선택 표시 + 우측 상세 패널 갱신. 스핀 중에는 무시(결과 확정 연출 대기).
 		        if self.spinning then return end
 		        if self.slotData == nil or self.slotData[index] == nil then return end
+		        _SoundService:PlaySound(self.SfxClickDefault, 1)   -- 슬롯 선택음(가드 통과 후)
 		        self.selectedSlot = index
 		        local s = self.slotData[index]
 		        local eq = _BlacksmithConfig:GetEquipment(s.equipId)
@@ -710,6 +737,7 @@ script WeaponShopManager extends Logic
 		            log("[WeaponShopManager] buy ignored: no slot selected")
 		            return
 		        end
+		        _SoundService:PlaySound(self.SfxClickBuy, 1)   -- 무기 구입 확정음(가드 통과 후)
 		        log("[WeaponShopManager] request buy slot " .. tostring(self.selectedSlot))
 		        _GameManager:RequestBuyItem(self.selectedSlot)
 		        -- 시계 진행은 큐브 사용(서버 CubeUseCount) 기준으로만 일어난다(구매 시 진행 제거).
@@ -720,6 +748,7 @@ script WeaponShopManager extends Logic
 	@ExecSpace("ClientOnly")
 	method void OnRefreshClicked()
 		        -- 새로고침: 서버에 상점 재추첨 요청(메소 차감 없음). 새 데이터 도착 시 스핀이 다시 돈다.
+		        _SoundService:PlaySound(self.SfxClickDefault, 1)   -- 새로고침 클릭음
 		        log("[WeaponShopManager] request refresh shop")
 		        _GameManager:RequestRefreshShop()
 	end
@@ -727,6 +756,7 @@ script WeaponShopManager extends Logic
 	@ExecSpace("ClientOnly")
 	method void OnBackClicked()
 		        -- '← 로비': 상점을 닫고 허브로 복귀(화면 상태를 lobby로). 다음 프레임에 board가 게이팅으로 숨는다.
+		        _SoundService:PlaySound(self.SfxClickLight, 1)   -- 로비 복귀 클릭음
 		        _LobbyManager.ActiveScreen = "lobby"
 		        log("[WeaponShopManager] back to lobby")
 	end

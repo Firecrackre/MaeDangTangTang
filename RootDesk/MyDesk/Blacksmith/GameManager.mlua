@@ -499,7 +499,7 @@ script GameManager extends Logic
     @ExecSpace("ServerOnly")
     method string SerializePotential(table s, any pr)
         -- 잠재 결과(등급+옵션 3줄)를 미러 문자열로 직렬화한다(클라 스크래치 UI가 파싱해 표시).
-        --   포맷: "cubeCount;grade;line;line;line", line = "label|value|unit|optionType|isBonus|isDestroy|isValid|bonus".
+        --   포맷: "cubeCount;grade;line;line;line", line = "label|value|unit|optionType|isBonus|isDestroy|isValid|bonus|optionGroup".
         --   맨 앞 cubeCount는 매 큐브 사용마다 값이 달라지게 해 클라가 동일 결과 재추첨도 변화로 감지하게 한다.
         --     재활용 전문가 발동 시 CubeUseCount가 안 오르므로 RecycleProcCount를 합산해 항상 증가시킨다(클라는 이 값 버림).
         --   isValid는 주요 옵션의 장비 유효성(서버 판정). 비주요(잡옵/파괴)는 0.
@@ -516,6 +516,7 @@ script GameManager extends Logic
                 .. "|" .. (o.isDestroy and "1" or "0")
                 .. "|" .. tostring(isValid)
                 .. "|" .. tostring(bonus)
+                .. "|" .. tostring(o.optionGroup or "Junk")
             table.insert(parts, line)
         end
         return table.concat(parts, ";")

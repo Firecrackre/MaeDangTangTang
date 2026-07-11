@@ -1,0 +1,37 @@
+@Logic
+script BgmManager extends Logic
+    -- 맵별 배경음악(BGM) 전환 매니저 (클라 전용).
+    -- 역할: LocalPlayer의 CurrentMapName을 폴링해, 맵이 바뀌는 에지에서만 BGM을 교체한다.
+    --   TitleMap → 타이틀 BGM / 그 외 모든 맵(InGameMap 등) → 게임플레이 BGM. (docs/specs/soundlist.md §1)
+    -- @Logic인 이유: 맵 전환을 넘어 세션 전체를 살아야 하고(OnMapEnter는 @Logic에 안 옴), TitleManager와 동일 패턴.
+    -- BGM 채널은 단일(SoundService: Stop/Pause/SetVolume/IsPlayBGM에 id 파라미터 없음)이라, 교체 시 StopBGM 선행으로 방어.
+    --   PlayBGM 재호출 시맨틱이 문서에 없어 매 프레임 호출은 금지 — 반드시 아래 2중 에지(맵 변화 + BGM RUID 변화)로만 호출한다.
+
+    property string TitleMapName = "TitleMap"
+    property string TitleBgmRUID = "3def13e49e10434282979764c612440a"     -- BGM: 타이틀 화면
+    property string GameplayBgmRUID = "bbbf2616f2064d658f4d53af5faf9d3e"  -- BGM: 메인 게임플레이
+    property number BgmVolume = 0.6
+
+    property string lastMapName = ""   -- 마지막으로 관측한 맵 이름(미관측 센티널 = "")
+    property string currentBgm = ""    -- 현재 재생 중인 BGM RUID("" = 미재생)
+
+    @ExecSpace("ClientOnly")
+    method void OnUpdate(number delta)
+        -- 맵 폴링 → 에지에서만 BGM 전환(중복 PlayBGM 방지).
+        local lp = _UserService.LocalPlayer
+        if not isvalid(lp) then return end             -- 스폰 전 nil 가드
+        local mapName = lp.CurrentMapName
+        if mapName == nil or mapName == "" then return end
+        if mapName == self.lastMapName then return end -- 맵 변화 에지에서만 진행
+        self.lastMapName = mapName
+
+        local target = self.GameplayBgmRUID
+        if mapName == self.TitleMapName then target = self.TitleBgmRUID end
+        if target == self.currentBgm then return end   -- 맵은 바뀌었지만 같은 BGM(그 외 맵→그 외 맵)이면 유지
+
+        if self.currentBgm ~= "" then _SoundService:StopBGM(true) end
+        _SoundService:PlayBGM(target, self.BgmVolume)
+        self.currentBgm = target
+        log("[Bgm] map=" .. mapName .. " -> " .. (target == self.TitleBgmRUID and "title" or "gameplay"))
+    end
+end

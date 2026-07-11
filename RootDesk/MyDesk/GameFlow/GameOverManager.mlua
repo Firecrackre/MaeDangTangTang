@@ -39,7 +39,8 @@ script GameOverManager extends Logic
     property number lockHoldTime = 0.7     -- 자물쇠 후 박스 낙하까지 대기
     property string clankHeavyRUID = "8f610e071e87408a8326e849a88d0613"  -- 무거운 금속 잠금(msw-search)
     property string clankShortRUID = "ab731794c2e14e399b475767edd5c407"  -- 짧은 금속 잠금(msw-search)
-    property string clickSoundRUID = "972843e759204d3e9ad84e7d3fa94f83"  -- 공용 클릭음(프로젝트)
+    property string clickSoundRUID = "b2b0b752bf914fb5abd885470c84c8fc"  -- UI_Click_Default: 다시 하기
+    property string defeatSoundRUID = "6e462a4ae44b4a518ea68fde456ea5c3" -- Game_Defeat: 패배 결과 화면
     property number sfxVolume = 1.0
 
     -- ===== Runtime state =====
@@ -205,6 +206,8 @@ script GameOverManager extends Logic
     @ExecSpace("ClientOnly")
     method void BeginBoxDrop()
         -- 박스 낙하 시작(화면 위 바깥에서). 게임오버 루트(딤 포함)는 이 시점에 켠다.
+        -- 패배음: 두 진입 경로(Show=repayment/debt, 사슬 시퀀스=weapon/cube)가 모두 여기를 1회만 경유한다.
+        _SoundService:PlaySound(self.defeatSoundRUID, self.sfxVolume)
         self.phase = "boxDrop"
         self.timer = 0
         self.boxY = self.boxStartY

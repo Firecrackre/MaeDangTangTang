@@ -351,20 +351,20 @@
               },
               "MobileOnly": false,
               "OffsetMax": {
-                "x": 171.5,
-                "y": 168.5
+                "x": 132.6482,
+                "y": 153.628265
               },
               "OffsetMin": {
-                "x": -171.5,
-                "y": -168.5
+                "x": -132.6482,
+                "y": -153.628265
               },
               "Pivot": {
                 "x": 0.5,
                 "y": 0.5
               },
               "RectSize": {
-                "x": 343.0,
-                "y": 337.0
+                "x": 265.2964,
+                "y": 307.256531
               },
               "UIMode": 1,
               "UIScale": {
@@ -407,7 +407,7 @@
               "EndFrameIndex": 2147483647,
               "IgnoreMapLayerCheck": false,
               "ImageRUID": {
-                "DataId": "40ef3c767f194873afb7ddfc6bcfca5d"
+                "DataId": "fd70c49cfc534d0b913dde262d46cb6c"
               },
               "LocalPosition": {
                 "x": 0.0,
@@ -612,7 +612,7 @@
               "MinSize": 10.0,
               "OutlineWidth": 0.25,
               "OverrideSorting": false,
-              "Text": "기술 업그레이드",
+              "Text": "제이엠의 비법서",
               "Underlay": false,
               "Enable": true
             }

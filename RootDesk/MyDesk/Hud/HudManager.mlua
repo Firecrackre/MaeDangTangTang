@@ -76,6 +76,7 @@ script HudManager extends Logic
     property number RecyclePunchScale = 1.3   -- 등장 순간 아이콘 펀치 배율
     property string SfxRecycle = "24c5714add3742938fa8afbc30ded216"  -- 발동 효과음(반짝 마법음)
     property number SfxRecycleVolume = 0.8
+    property string SfxClickDefault = "b2b0b752bf914fb5abd885470c84c8fc"  -- UI_Click_Default: 대출 유도 팝업
 
     @ExecSpace("ClientOnly")
     method void OnBeginPlay()
@@ -516,6 +517,7 @@ script HudManager extends Logic
     @ExecSpace("ClientOnly")
     method void OnLoanPopupClicked()
         -- 팝업 클릭 → 재정 관리 페이지 진입(FinanceManager가 화면 전환·팝업 퇴장 처리).
+        _SoundService:PlaySound(self.SfxClickDefault, 1)
         log("[HudManager] loan popup clicked -> open finance")
         if isvalid(_FinanceManager) then
             _FinanceManager:Open()

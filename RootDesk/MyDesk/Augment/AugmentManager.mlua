@@ -20,12 +20,16 @@ script AugmentManager extends Logic
     property number PunchDuration = 0.22
     property number SlotSpacingX = 300.0   -- 3슬롯 간 X 간격(칸 축소 시 가운데 정렬 계산에 사용)
 
-    -- 사운드(ui-sound.md 클릭 + msw-search 오류음 + 강화 성공음/정지음).
-    property string clickSoundRUID = "972843e759204d3e9ad84e7d3fa94f83"
-    property string errorSoundRUID = "174d501eccd04eadbd6c6411d4ade7e7"
-    property string successSoundRUID = "b060035abee84543bdd77c69dc7aeab3"
-    property string reelStopSoundRUID = "972843e759204d3e9ad84e7d3fa94f83"
+    -- 사운드(docs/specs/soundlist.md).
+    property string clickSoundRUID = "0868b0f43f1949c1ace06ae4fa33ee55"   -- UI_Click_Light: 닫기/탭
+    property string errorSoundRUID = "174d501eccd04eadbd6c6411d4ade7e7"   -- 메소 부족 오류음(msw-search)
+    property string successSoundRUID = "69f85d65004541db82615459032e1d4a" -- UI_Click_Confirm: 증강 구매 확정
+    property string reelStopSoundRUID = "972843e759204d3e9ad84e7d3fa94f83" -- 슬롯 릴 정지음(유지)
     property number sfxVolume = 1.0
+    -- 슬롯머신 스핀 루프음(무기 상점과 공유 — 증강 3택 스핀에도 적용).
+    property string revealLoopSoundRUID = "7c73a090bd1d4bfe8fb860b2ad44031d"
+    property number revealLoopVolume = 0.8
+    property boolean reelLoopOn = false
 
     -- ── 마우스 커서 RUID (인스펙터 SSOT — 사용자가 스프라이트 RUID 입력. 비우면 기본 커서 유지) ──
     @DisplayName("커서: 구매버튼 호버(황금 망치)") property string CursorHammerRUID = ""      -- 구매 버튼 hover
@@ -193,6 +197,7 @@ script AugmentManager extends Logic
                 end
             end
         end
+        _SoundService:StopSound(self.revealLoopSoundRUID)   -- 릴 대기음 안전망 정지.
         _InputService:ResetCursor()   -- 커서가 망치 상태로 남지 않도록 기본 복원.
     end
 
@@ -334,6 +339,7 @@ script AugmentManager extends Logic
         self:AdjustSlotLayout(count)
 
         self.spinning = true
+        self:SetReelLoop(true)   -- 릴 회전 대기음 시작(빈 선택지 early return 뒤라 실제 스핀 시에만)
         self.spinTime = 0
         self.spinSlots = {}
         self.hoverBuyIndex = 0   -- 스핀 중 버튼 비활성 → 이탈 이벤트 누락 대비 호버 상태 초기화(stuck 방지).
@@ -445,7 +451,20 @@ script AugmentManager extends Logic
         end
         if allStopped then
             self.spinning = false
+            self:SetReelLoop(false)   -- 마지막 슬롯 정지 → 대기음 정지
             log("[AugmentManager] spin done")
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SetReelLoop(boolean on)
+        -- 릴 회전 대기음 시작/정지(플래그 디듀프 — PlayLoopSound 중첩 방지).
+        if on == self.reelLoopOn then return end
+        self.reelLoopOn = on
+        if on then
+            _SoundService:PlayLoopSound(self.revealLoopSoundRUID, self.revealLoopVolume)
+        else
+            _SoundService:StopSound(self.revealLoopSoundRUID)
         end
     end
 
@@ -465,6 +484,7 @@ script AugmentManager extends Logic
             end
         end
         self.spinning = false
+        self:SetReelLoop(false)   -- 화면 숨김 → 대기음 즉시 정지
         self:ResetFXEntities()
         log("[AugmentManager] spin finished instantly (hidden)")
     end

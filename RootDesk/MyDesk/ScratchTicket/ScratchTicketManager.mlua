@@ -178,11 +178,27 @@ script ScratchTicketManager extends Component
     property Color FocusDimColor = Color(0, 0, 0, 1)           -- 이탈 줄 어둠 색(알파는 긁기 진행률이 결정)
     property Color FocusDimColorDestroy = Color(0.06, 0, 0, 1) -- 파괴 줄 어둠 색(불안한 검붉음)
 
-    -- ===== 효과음 RUID (WeaponShopManager 재사용 + msw-search 코인음) =====
-    property string SfxClick = "972843e759204d3e9ad84e7d3fa94f83"  -- 잡옵/기본 공개음
-    property string SfxValid = "b060035abee84543bdd77c69dc7aeab3"  -- 유효 옵션 성공음
-    property string SfxBonus = "cb270655c69841aabb02b11de9f8a8be"  -- 이탈/대박 팡파레
-    property string SfxCoin = "acb0f70275b7422dbcc8a395cbbd9d28"   -- 코인 짤랑음(동전 낙하)
+    -- ===== 효과음 RUID (docs/specs/soundlist.md) =====
+    -- 옵션 공개 결과음(줄이 모두 공개될 때 1회). 서버 optionGroup(Attack/MainStat)+isValid+isBonus로 5분기.
+    property string SfxOptionBad          = "a6f91022d4ca4238bcda3bc9fcafabc3"  -- 잡옵/비유효
+    property string SfxOptionGood         = "ce686c2a652744cdbf1aa9f66399c843"  -- 유효 스탯(MainStat)
+    property string SfxOptionJackpot      = "756bec092ef6470c98a30dd564219259"  -- 유효 공격계열(Attack: 공/마/보공)
+    property string SfxOptionSuperJackpot = "d048171b80bc497292892b37229ca9dc"  -- 유효 스탯 이탈
+    property string SfxOptionLegendary    = "f5fb4f53733a4327a6c4ba1445a6fced"  -- 유효 공격계열 이탈
+    property string SfxOptionDestroy      = "4d3d9de1b72d48eeb9f76f3a144a9bee"  -- 장비 파괴
+    -- 스크래치 루프음(긁는 동안 재생, 손 떼거나 완료 시 정지).
+    property string SfxScratchLoop = "5ffcdd8177a943638529749d26627f67"
+    property number SfxScratchLoopVolume = 0.8
+    -- 무기 판매 결과음(유효 옵션 개수 0/1/2/3 → Low/Normal/High/Jackpot).
+    property string SfxSaleLow     = "66f8bbbc1d6a4166973774960d7b1ea1"
+    property string SfxSaleNormal  = "d879b6be959b4586b3a428b626605605"
+    property string SfxSaleHigh    = "9b6e608ee81043f8bb045b07509f443d"
+    property string SfxSaleJackpot = "2ba4a50df8df4b919b5670d48b72159f"
+    -- UI 클릭음.
+    property string SfxClickDefault = "b2b0b752bf914fb5abd885470c84c8fc"  -- 큐브 사용/수령
+    property string SfxClickConfirm = "69f85d65004541db82615459032e1d4a"  -- 판매 확정
+    property string SfxCoin = "acb0f70275b7422dbcc8a395cbbd9d28"          -- 코인 짤랑음(동전 낙하)
+    property boolean scratchLoopOn = false   -- 스크래치 루프 재생 중 플래그(중복 PlayLoopSound 방지)
 
     -- ===== 마우스 커서 RUID (인스펙터 SSOT — 사용자가 스프라이트 RUID 입력. 비우면 기본 커서 유지) =====
     @DisplayName("커서: 은박 호버(금색 코인)") property string CursorGoldRUID = "02a489cccff24a139a6c3582a5871f58"     -- 은박 위 hover = 금색 메소 sprite(코인 낙하와 동일 아트)
@@ -639,6 +655,8 @@ script ScratchTicketManager extends Component
         if not on then self:StopCoins() end
         if not on then self:EndFocus() end             -- 포커스 스포트라이트 잔상 방지(줌/어둠 원복).
         if not on then self.scratchReady = false end   -- 맵 이탈/아이템 없음 → 긁기 차단.
+        -- 비활성 후에는 OnUpdate가 early return하여 UpdateCursor(루프 정지 에지)가 안 돌므로 여기서 명시 정지.
+        if not on then self:SetScratchLoop(false) end
     end
 
     @ExecSpace("ClientOnly")
@@ -905,7 +923,7 @@ script ScratchTicketManager extends Component
     @ExecSpace("ClientOnly")
     method void SetupScratch(string pdata)
         -- 큐브 사용 결과를 받아 옵션 3줄을 은박으로 덮어 표시(긁기 시작 가능 상태). 잠재 데이터 파싱.
-        -- pdata = "cubeCount;grade;line;line;line", line = "label|value|unit|optionType|isBonus|isDestroy|isValid"
+        -- pdata = "cubeCount;grade;line;line;line", line = "label|value|unit|optionType|isBonus|isDestroy|isValid|bonus|optionGroup"
         self:EndFocus()   -- 재굴림 시 이전 포커스 스포트라이트 잔상 원복
         local fields = self:Split(pdata, ";")
         if #fields < 5 then return end
@@ -922,6 +940,7 @@ script ScratchTicketManager extends Component
                 isDestroy = (parts[6] == "1"),
                 isValid = (parts[7] == "1"),
                 bonus = tonumber(parts[8]) or 0,   -- 서버 권위 줄별 판매가 보너스(실시간 상승분)
+                optionGroup = parts[9] or "Junk",  -- 옵션 계열(Attack=공/마/보공, MainStat=스탯) — 결과음 5분기용
                 revealed = false,
             }
         end
@@ -1662,6 +1681,7 @@ script ScratchTicketManager extends Component
         -- 포커스 스포트라이트 즉시 원상복구(줌아웃+어둠 해제) — 이후 시소(StartPrizeFX)/파괴 연출이
         -- 원위치 기준으로 재생되도록 반드시 이 시점(연출 시작 전)에 복구한다.
         self:EndFocus()
+        self:SetScratchLoop(false)   -- 줄 공개 시 스크래치 루프 정지(결과음과 겹침 방지)
         local o = nil
         if self.optionLines ~= nil then o = self.optionLines[index] end
         local prizes = { self.prize1, self.prize2, self.prize3 }
@@ -1708,7 +1728,7 @@ script ScratchTicketManager extends Component
                 local pl = { self.label1, self.label2, self.label3 }
                 if isvalid(pl[index]) then pl[index].FontColor = Color(0.95, 0.25, 0.22, 1.0) end
                 self:StartLabelFX(index, 1.2, 0, true)
-                _SoundService:PlaySound(self.SfxClick, 1)
+                _SoundService:PlaySound(self.SfxOptionDestroy, 1)
                 log("[ScratchTicket] price FROZEN (destroy line)")
             else
                 o.revealed = true
@@ -1734,24 +1754,36 @@ script ScratchTicketManager extends Component
 
     @ExecSpace("ClientOnly")
     method void PlayRevealFX(any o)
-        -- 공개 결과별 판매가 상승 연출(잡옵/유효/이탈 차별화) + 델타 팝업 + 코인/사운드.
+        -- 공개 결과별 판매가 상승 연출(잡옵/유효/이탈 차별화) + 델타 팝업 + 코인. 사운드는 PlayOptionSound가 담당.
+        self:PlayOptionSound(o)
         if o.isValid and o.isBonus then
-            -- 이탈: 보라 플래시 + 큰 펀치 + 팡파레 + 다량 코인.
+            -- 이탈: 보라 플래시 + 큰 펀치 + 다량 코인.
             self:FlashPrice(Color(0.72, 0.45, 1.0, 1.0), self.PricePunchScale)
-            _SoundService:PlaySound(self.SfxBonus, 1)
             self:SpawnCoins(self.CoinCountBonus, true)
             self:ShowDelta(o.bonus, Color(0.82, 0.58, 1.0, 1.0))
         elseif o.isValid then
-            -- 유효: 노랑 플래시 + 중간 펀치 + 성공음 + 소량 코인.
+            -- 유효: 노랑 플래시 + 중간 펀치 + 소량 코인.
             self:FlashPrice(Color(1.0, 0.9, 0.35, 1.0), (self.PricePunchScale + 1.0) * 0.5)
-            _SoundService:PlaySound(self.SfxValid, 1)
             self:SpawnCoins(self.CoinCountValid, false)
             self:ShowDelta(o.bonus, Color(1.0, 0.88, 0.3, 1.0))
         else
-            -- 잡옵/비유효: 소폭 상승, 회색 델타, 기본음(코인 없음).
+            -- 잡옵/비유효: 소폭 상승, 회색 델타(코인 없음).
             self:FlashPrice(Color(0.75, 0.78, 0.85, 1.0), 1.06)
-            _SoundService:PlaySound(self.SfxClick, 1)
             self:ShowDelta(o.bonus, Color(0.72, 0.74, 0.8, 1.0))
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void PlayOptionSound(any o)
+        -- 옵션 공개 결과음 5분기(soundlist.md). 파괴는 OnLineRevealed 별도 경로라 여기 도달 불가.
+        --   이탈(공격계열=Legendary/스탯=SuperJackpot) > 유효(공격계열=Jackpot/스탯=Good) > 잡옵/비유효(Bad).
+        local atk = (o.optionGroup == "Attack")
+        if o.isValid and o.isBonus then
+            _SoundService:PlaySound(atk and self.SfxOptionLegendary or self.SfxOptionSuperJackpot, 1)
+        elseif o.isValid then
+            _SoundService:PlaySound(atk and self.SfxOptionJackpot or self.SfxOptionGood, 1)
+        else
+            _SoundService:PlaySound(self.SfxOptionBad, 1)
         end
     end
 
@@ -2045,6 +2077,7 @@ script ScratchTicketManager extends Component
         self.cubePurchasePending = true
         self.cubePendingTimer = 0
         self.lastCubeType = cubeType
+        _SoundService:PlaySound(self.SfxClickDefault, 1)   -- 큐브 사용 클릭음(가드 통과 후)
         log("[ScratchTicket] request use cube: " .. cubeType)
         _GameManager:RequestUseCube(cubeType)
     end
@@ -2058,6 +2091,7 @@ script ScratchTicketManager extends Component
             return
         end
         -- 판매 확정 요청(서버는 즉시 지급하지 않고 IsSalePending으로 전환 → 결과 창 표시). 중복 클릭 방지.
+        _SoundService:PlaySound(self.SfxClickConfirm, 1)   -- 판매 확정음(결과음 Sale_*는 결과 창에서 뒤이어 재생)
         log("[ScratchTicket] request sell (with potential)")
         _GameManager:RequestSellItem()
         self:SetButtonEnabled(self.sellButton, false)
@@ -2070,6 +2104,7 @@ script ScratchTicketManager extends Component
             log("[ScratchTicket] collect ignored: no pending sale")
             return
         end
+        _SoundService:PlaySound(self.SfxClickDefault, 1)   -- 수령 클릭음
         log("[ScratchTicket] request collect sale")
         _GameManager:RequestCollectSale()
     end
@@ -2079,6 +2114,20 @@ script ScratchTicketManager extends Component
         -- 판매 확정(수령 대기) → 결과 창 표시(무기 아이콘 + 판매가). 모달: 긁기/버튼 차단.
         self.saleShown = true
         self.scratchReady = false
+        -- 판매 결과음: 유효 옵션 개수(0/1/2/3) → Low/Normal/High/Jackpot. optionLines는 수령 전까지 유지됨.
+        local validCount = 0
+        if self.optionLines ~= nil then
+            for i = 1, 3 do
+                local ol = self.optionLines[i]
+                if ol ~= nil and ol.isValid then validCount = validCount + 1 end
+            end
+        end
+        local saleSfx = self.SfxSaleLow
+        if validCount >= 3 then saleSfx = self.SfxSaleJackpot
+        elseif validCount == 2 then saleSfx = self.SfxSaleHigh
+        elseif validCount == 1 then saleSfx = self.SfxSaleNormal end
+        _SoundService:PlaySound(saleSfx, 1)
+        log("[ScratchTicket] sale sfx: validCount=" .. validCount)
         local eq = _BlacksmithConfig:GetEquipment(_GameManager.PendingSaleItemId)
         if eq ~= nil and isvalid(self.saleWeaponIcon) then
             local spr = self.saleWeaponIcon.SpriteGUIRendererComponent
@@ -2214,11 +2263,25 @@ script ScratchTicketManager extends Component
         --   긁는 중 판정은 scratchTimer(>0)로 추론(은박은 release 이벤트가 없어 OnTouchHold가 매 프레임 갱신).
         --   scratchReady일 때만(낙하 완료·긁기 가능 상태) 코인 커서를 노출한다.
         if self.scratchTimer > 0 then self.scratchTimer = self.scratchTimer - delta end
+        -- 긁는 중(scratchReady + timer>0)이면 루프음, 아니면 정지. 손 뗌·완료·판매모달·재굴림·대기복귀 전부 여기 falling edge가 커버.
+        self:SetScratchLoop(self.scratchReady and self.scratchTimer > 0)
         local target = ""
         if self.scratchReady and self:IsCursorOverFoil() then
             if self.scratchTimer > 0 then target = "copper" else target = "gold" end
         end
         self:ApplyCursor(target)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SetScratchLoop(boolean on)
+        -- 스크래치 루프음 시작/정지(플래그 디듀프 — PlayLoopSound 중첩 방지). 정지는 StopSound로 전 인스턴스 소거.
+        if on == self.scratchLoopOn then return end
+        self.scratchLoopOn = on
+        if on then
+            _SoundService:PlayLoopSound(self.SfxScratchLoop, self.SfxScratchLoopVolume)
+        else
+            _SoundService:StopSound(self.SfxScratchLoop)
+        end
     end
 
     @ExecSpace("ClientOnly")
@@ -2283,6 +2346,7 @@ script ScratchTicketManager extends Component
         -- 입력/버튼/호버 구독 해제(필수).
         if self.touchHandler then _InputService:DisconnectEvent(ScreenTouchEvent, self.touchHandler) end
         if self.holdHandler then _InputService:DisconnectEvent(ScreenTouchHoldEvent, self.holdHandler) end
+        _SoundService:StopSound(self.SfxScratchLoop)   -- 스크래치 루프음 안전망 정지(플래그 무시).
         _InputService:ResetCursor()   -- 커서가 코인 상태로 남지 않도록 기본 복원.
         if self.clickRecords ~= nil then
             for _, rec in ipairs(self.clickRecords) do
