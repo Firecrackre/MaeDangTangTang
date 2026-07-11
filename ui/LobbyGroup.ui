@@ -1624,7 +1624,7 @@
               "OutlineWidth": 0.25,
               "OverrideSorting": false,
               "SortingLayer": "MapLayer0",
-              "Text": "재정 관리",
+              "Text": "대출 현황",
               "Underlay": false,
               "Enable": true
             }

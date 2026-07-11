@@ -8,8 +8,12 @@ script ScratchTicketManager extends Component
     property integer GridWidth = 40           -- foil pixel-grid width per line
     property integer GridHeight = 8           -- foil pixel-grid height per line
     property number BrushRadius = 2.0         -- erase circle radius (pixel units)
-    property number EraseStrength = 30        -- 0~100. alpha removed per touch = EraseStrength/100
-    property number CompletionThreshold = 0.7 -- foil alpha fraction removed to auto-complete a line
+    property number EraseStrength = 30        -- 0~100. 잡옵/일반 줄의 per-touch 알파 감소량(=강도/100). 특수 줄은 아래 값 사용.
+    @DisplayName("특수옵션 긁기 강도(유효/이탈/파괴)")
+    property number EraseStrengthSpecial = 9  -- 유효옵션/이탈/파괴 줄의 per-touch 강도(낮을수록 여러 번 긁어야 공개).
+    property number CompletionThreshold = 0.7 -- 완료(공개) 기준 = 벗겨진 알파 비율. 잡옵/파괴 줄 기본값.
+    @DisplayName("완료 기준: 긍정옵션(유효/이탈)")
+    property number CompletionThresholdPositive = 0.6 -- 긍정 옵션(유효/이탈, 파괴 제외) 줄은 더 많이 긁어야 공개.
     property string TargetMapName = "InGameMap" -- gate the popup to this map
     property string ConfigDataSetName = "ScratchTicketConfig" -- grid/brush tuning data table
     property boolean UseConfigDataSet = false -- true면 CSV가 위 인스펙터 값을 덮어씀. false(기본)면 인스펙터가 SSOT.
@@ -85,6 +89,35 @@ script ScratchTicketManager extends Component
     property number CubeSlideOffset = 480       -- 큐브 사용 시 구매창이 보드 뒤로 밀려들어갈 X 거리(px, +=보드 방향). 도달 시 숨김.
     property number CubeSlideSpeed = 2400       -- 슬라이드 속도(px/s). 목표까지 선형 이동 후 스냅.
 
+    -- ===== 복권 낙하 연출 튜닝 (인스펙터 SSOT) =====
+    property number BoardDropOffsetY = 1000     -- 복권이 제자리 위에서 시작하는 높이(px). 이 높이에서 제자리로 낙하.
+    property number BoardDropTime = 0.5         -- 낙하 지속(초, ease-out).
+    property number BoardLandPunch = 1.08       -- 착지 시 board 살짝 팝 배율(1 이하면 팝 없음).
+
+    -- ===== 등급별 복권 배경 RUID (인스펙터 SSOT, CubeBG_*) =====
+    @DisplayName("배경 RUID: 커먼")     property string CubeBGCommon    = "03ed06c26f574137b79d1cbcd6727f7e"
+    @DisplayName("배경 RUID: 레어")     property string CubeBGRare      = "01d770f859b44ac98136268a81cec2f8"
+    @DisplayName("배경 RUID: 에픽")     property string CubeBGEpic      = "c20153c7284045f49bfc5d56ae8e5fdd"
+    @DisplayName("배경 RUID: 유니크")   property string CubeBGUnique    = "b2ebd9cc51094c0f9360fa11480ef994"
+    @DisplayName("배경 RUID: 레전더리") property string CubeBGLegendary = "917341095dbc43a691bf83d62c699783"
+
+    -- ===== 등급 텍스트 라벨(TicketGradeText) — Board 상단, 등급명 + 상위 등급 애니메이션 =====
+    property TextGUIRendererComponent ticketGradeText = "7df00a45-1e95-475e-890c-421013938033"
+    -- Epic: 둥실둥실 부유
+    property number GradeFloatAmp = 5           -- 부유 진폭(px)
+    property number GradeFloatPeriod = 2.6      -- 부유 한 사이클 주기(초)
+    -- Unique: 발광(소프트 헤일로 펄스 + 미세 브리딩)
+    property number GradeGlowPeriod = 1.1       -- 발광 펄스 주기(초)
+    property Color GradeGlowColor = Color(1, 0.95, 0.55, 1)  -- 헤일로 색(금빛)
+    property number GradeGlowDilateMin = 0.0    -- 헤일로 두께 최소
+    property number GradeGlowDilateMax = 0.45   -- 헤일로 두께 최대
+    property number GradeGlowSoftness = 1.0     -- 헤일로 번짐(소프트니스)
+    property number GradeGlowScaleMax = 1.05    -- 발광 브리딩 최대 배율
+    -- Legendary: 물결(수직 사인 + Z회전 진동)
+    property number GradeWaveAmp = 14           -- 물결 수직 진폭(px)
+    property number GradeWavePeriod = 1.3       -- 물결 주기(초)
+    property number GradeWaveRotDeg = 8         -- 물결 Z회전 진폭(도)
+
     -- ===== 옵션 라벨 공개 tweening 튜닝 (인스펙터 SSOT) =====
     property number LabelPunchTime = 0.45       -- 라벨 팝 지속(초)
     property number LabelPunchJunk = 1.10       -- 잡옵/비유효 팝 최대 배율
@@ -92,6 +125,32 @@ script ScratchTicketManager extends Component
     property number LabelPunchBonus = 1.55      -- 이탈 팝 최대 배율
     property number LabelWobbleDeg = 8          -- 이탈 팝 시 Z회전 흔들림 최대 각(도)
     property number LabelShakeAmp = 6           -- 파괴 라벨 X 흔들림 진폭(px)
+
+    -- ===== Prize 배경 이미지 RUID (인스펙터 SSOT) =====
+    @DisplayName("Prize 기본(공개 전) 이미지") property string PrizeImgDefault = "d827c63248df4cfa9013fd87e0813233"
+    @DisplayName("Prize 유효옵션 이미지")      property string PrizeImgValid   = "f6301348c0494d9e9e03911651371c5d"
+    @DisplayName("Prize 이탈옵션 이미지")      property string PrizeImgBonus   = "9f6001ed507d443c9cb17963edd76728"
+    @DisplayName("Prize 파괴옵션 이미지")      property string PrizeImgDestroy = "033bd0564f494ceea75192e443a79687"
+
+    -- ===== Prize 박스 긍정 공개 강조(시소) 튜닝 (인스펙터 SSOT) =====
+    property number PrizePunchTime  = 0.5   -- 강조 지속(초)
+    property number PrizePunchScale = 1.12  -- 살짝 커지는 최대 배율(은은하게)
+    property number PrizeSeesawDeg  = 6      -- 시소 Z회전 최대 각(도)
+    property number PrizeSwayX      = 4      -- 좌우 흔들림 진폭(px)
+    property number PrizeSwayY      = 4      -- 위아래 흔들림 진폭(px)
+
+    -- ===== 이탈 옵션 별 파티클 (인스펙터 SSOT) =====
+    @DisplayName("별 스프라이트/클립 RUID") property string StarRUID = "6bda1ce4971840bfa0f867e27aa75426"
+    @DisplayName("별이 자체 애니메이션 클립인가") property boolean StarSelfAnimated = true  -- true=클립이 스스로 반짝임(코드 트윙클 끔), false=정적 스프라이트 코드 트윙클
+    property number StarSpawnInterval = 0.11  -- 새 별 생성 간격(초). 작을수록 화려(동시수↑, 동시개수≈수명/간격)
+    property number StarLifeMin = 0.6         -- 한 별 반짝임 지속 최소(초)
+    property number StarLifeMax = 1.0         -- 한 별 반짝임 지속 최대(초)
+    property number StarSizeMin = 16          -- 별 최소 크기(px)
+    property number StarSizeMax = 30          -- 별 최대 크기(px)
+    property number StarMarginX = 40          -- 박스 좌우 여백(별이 박스 밖으로 안 나가게)
+    property number StarMarginY = 12          -- 박스 상하 여백(px)
+    property number StarMaxSpinDeg = 60       -- 반짝이는 동안 회전 최대(도)
+    property Color  StarTint = Color(1, 1, 1, 1)  -- 별 색조(원색). 알파는 트윙클로 덮어씀
 
     -- ===== 코인 낙하 연출 튜닝 =====
     property integer CoinGravity = 1500
@@ -108,6 +167,11 @@ script ScratchTicketManager extends Component
     property string SfxValid = "b060035abee84543bdd77c69dc7aeab3"  -- 유효 옵션 성공음
     property string SfxBonus = "cb270655c69841aabb02b11de9f8a8be"  -- 이탈/대박 팡파레
     property string SfxCoin = "acb0f70275b7422dbcc8a395cbbd9d28"   -- 코인 짤랑음(동전 낙하)
+
+    -- ===== 마우스 커서 RUID (인스펙터 SSOT — 사용자가 스프라이트 RUID 입력. 비우면 기본 커서 유지) =====
+    @DisplayName("커서: 은박 호버(금색 코인)") property string CursorGoldRUID = "02a489cccff24a139a6c3582a5871f58"     -- 은박 위 hover = 금색 메소 sprite(코인 낙하와 동일 아트)
+    @DisplayName("커서: 긁는 중(금색 코인)")   property string CursorCopperRUID = "02a489cccff24a139a6c3582a5871f58"   -- 긁는 중도 금색 메소(사용자 요청). 동색 코인 있으면 인스펙터에서 교체.
+    property Vector2 CursorHotspot = Vector2(0, 0)   -- 커서 핫스팟(이미지 기준점 보정)
 
     -- ===== Runtime state =====
     property any tickets = nil
@@ -130,6 +194,10 @@ script ScratchTicketManager extends Component
     property boolean hoverMaster = false
     property number hoverTime = 0
 
+    -- 은박 커서 상태: 긁는 중 잔여시간/현재 적용 커서("":기본/"gold"/"copper"). hover는 커서 위치 폴링(IsCursorOverFoil).
+    property number scratchTimer = 0
+    property string cursorNow = ""
+
     property boolean destroyPending = false
     property number destroyTimer = 0
     property number boardBaseX = 0
@@ -140,8 +208,33 @@ script ScratchTicketManager extends Component
     property boolean cubeShownTarget = true  -- true=노출 위치로, false=보드 뒤(숨김) 위치로
     property boolean cubeBaseCaptured = false -- baseX 캡처 여부
 
+    -- 큐브 구매 연출 중 재클릭 방지 가드(클라 로컬)
+    property boolean cubePurchasePending = false  -- 구매 요청~구매창 재노출(또는 타임아웃)까지 클릭 차단
+    property number cubePendingTimer = 0
+    @MinValue(0.5) property number CubePendingTimeout = 2.5  -- 서버 거부(연출 미발생) 대비 안전 해제(초). 인스펙터 튜닝값(SSOT)
+
+    -- 복권 배경(Bg) 교체 + 낙하 연출 런타임 상태
+    property any bgSprite = nil               -- Board/Bg 의 SpriteGUIRendererComponent 캐시
+    property any gradeBgMap = nil             -- 등급(Common..Legendary) → 배경 RUID 매핑
+    property number boardRestY = 0            -- board 제자리 Y(OnBeginPlay 캡처)
+    property number boardDropStartY = 0       -- 이번 낙하 시작 Y(제자리 + offset)
+    property number dropT = -1               -- 낙하 경과(-1=비활성)
+    property boolean boardLanded = false      -- 이번 낙하 착지 처리 완료 여부(1회 트리거)
+
+    -- 등급 텍스트 라벨/애니 런타임 상태
+    property any gradeTextLabel = nil         -- 등급 → 표시 라벨 매핑
+    property any gradeTextAnim = nil          -- 등급 → 애니 모드(0 정적/1 부유/2 발광/3 물결) 매핑
+    property integer gradeTextMode = 0        -- 현재 애니 모드
+    property number gradeTextTime = 0         -- 애니 경과(초)
+    property Vector2 gradeTextBasePos = Vector2(0, 0)  -- 텍스트 제자리 위치(캡처)
+    property any gradeTextBaseColor = nil     -- 텍스트 기본 FontColor(캡처)
+    property boolean gradeTextBaseCaptured = false     -- 베이스 캡처 여부
+
     -- 5/5(상환 미납) 도달 시 큐브 재사용·구매 잠금 상태 추적(레벨 구동 변화 감지)
     property boolean lastRepayDue = false
+
+    -- 버튼별 저작 알파(투명 배경 버튼을 SetButtonEnabled이 흰색으로 덮지 않도록 기준값 보존). {[buttonEntity]=alpha}
+    property any buttonBaseAlpha = nil
 
     -- 증강 '귀한 태생' 단계 추적(레벨 구동) — 변화 시 큐브 가격 라벨 재세팅. -1 = 미초기화.
     property integer lastCubeCostStage = -1
@@ -172,6 +265,9 @@ script ScratchTicketManager extends Component
     property boolean saleShown = false   -- 판매 결과 창 표시 상태(IsSalePending 에지 감지)
 
     property any labelFX = nil           -- 인덱스 1~3 옵션 라벨 공개 팝 상태 {t,peak,wobble,shake}
+    property any prizeFX = nil           -- 인덱스 1~3 Prize 박스 긍정 공개 시소 상태 {t,baseX,baseY}
+    property any prizeStars = nil        -- [박스1~3] = 별 레코드 풀 {entity,ui,sprite,t,dur,active,baseSize,spin}
+    property any starEmit = nil          -- [박스1~3] = { active=bool, timer=number } (이탈 박스만 이멧)
 
     @ExecSpace("ClientOnly")
     method void OnBeginPlay()
@@ -184,12 +280,15 @@ script ScratchTicketManager extends Component
         self:RegisterTicket(3, self.foil3)
         self:BuildCrumbPool()
         self:BuildCoinPool()
+        self:BuildStarPools()
 
         self.clickRecords = {}
         self.enterRecords = {}
         self.optionLines = {}
         self.rainbowLines = {}
         self:InitLabelFX()
+        self:InitPrizeFX()
+        self:InitPrizeStars()
 
         -- 스크린 터치(긁기)
         self.touchHandler = _InputService:ConnectEvent(ScreenTouchEvent, self.OnTouchBegin)
@@ -209,12 +308,26 @@ script ScratchTicketManager extends Component
         self:WireHover(self.cubeIconWeird, self.OnWeirdEnter, self.OnWeirdExit)
         self:WireHover(self.cubeIconMaster, self.OnMasterEnter, self.OnMasterExit)
 
+
         -- 큐브 아이콘/구매 버튼 표시값(아이콘 RUID + 가격 라벨)
         self:InitCubeButtons()
 
+        -- 각 버튼의 저작 알파 캡처(투명 배경 버튼을 SetButtonEnabled이 흰색으로 덮지 않도록 기준값 보존).
+        --   ⚠ ResetToWaiting/SetButtonEnabled 호출 이전 시점이라 저작값이 온전하다.
+        self.buttonBaseAlpha = {}
+        for _, e in ipairs({ self.sellButton, self.cubeIconWeird, self.cubeIconMaster, self.weirdBuyButton, self.masterBuyButton }) do
+            if isvalid(e) and isvalid(e.SpriteGUIRendererComponent) then
+                self.buttonBaseAlpha[e] = e.SpriteGUIRendererComponent.Color.a
+            end
+        end
+
         if isvalid(self.board) and isvalid(self.board.UITransformComponent) then
             self.boardBaseX = self.board.UITransformComponent.anchoredPosition.x
+            self.boardRestY = self.board.UITransformComponent.anchoredPosition.y
         end
+
+        -- 복권 배경(Bg) 스프라이트 캐시 + 등급→배경 RUID 매핑 구성.
+        self:CacheGradeBg()
 
         -- 큐브 구매창 노출 위치(out) 캡처 → 이 위치에서 보드 뒤로 슬라이드.
         if isvalid(self.cubeSelect) and isvalid(self.cubeSelect.UITransformComponent) then
@@ -406,16 +519,32 @@ script ScratchTicketManager extends Component
                 self.lastPotentialData = "\0"
                 self.destroyPending = false
                 self.lastRepayDue = _GameManager.IsRepaymentDue
+                self.cubePurchasePending = false   -- 활성 진입 시 구매 가드 초기화(맵 재진입 대비)
                 self:RefreshCubeLock()
             end
         end
-        if not active then return end
+        if not active then
+            -- 비활성(맵 이탈/상점 화면/재정 열림) 진입 시 코인 커서가 남지 않도록 기본 커서로 원복(1회, 디듀프).
+            if self.cursorNow ~= "" then
+                self:ApplyCursor("")
+            end
+            return
+        end
 
         -- 5/5(상환 미납) 상태 변화 감지 → 큐브 재사용·구매 버튼 잠금/해제 (팔기만 가능).
         -- IsRepaymentDue는 5번째 큐브 RPC 후 @Sync로 뒤늦게 켜지므로 레벨 구동으로 폴링한다.
         if _GameManager.IsRepaymentDue ~= self.lastRepayDue then
             self.lastRepayDue = _GameManager.IsRepaymentDue
             self:RefreshCubeLock()
+        end
+
+        -- 구매 가드 안전 해제: 서버가 요청을 거부(연출 미발생)하면 SetCubeSelectShown(true) 전이가 없어
+        -- 플래그가 유지되므로, 타임아웃으로 재구매를 다시 허용한다(스턱 방지).
+        if self.cubePurchasePending then
+            self.cubePendingTimer = self.cubePendingTimer + delta
+            if self.cubePendingTimer >= self.CubePendingTimeout then
+                self.cubePurchasePending = false
+            end
         end
 
         -- 증강 '귀한 태생' 단계 변화 감지 → 큐브 가격 라벨 갱신(구매로 큐브가가 오르면 즉시 반영).
@@ -442,18 +571,27 @@ script ScratchTicketManager extends Component
         self:UpdateHoverFX(delta)
         self:UpdateRainbow(delta)
         self:UpdateLabelFX(delta)
+        self:UpdatePrizeFX(delta)
+        self:UpdatePrizeStars(delta)
         self:UpdateDestroy(delta)
         self:UpdateCrumbs(delta)
         self:UpdatePriceScroll(delta)
         self:UpdatePriceFX(delta)
         self:UpdateCoins(delta)
         self:UpdateCubeSlide(delta)
+        self:UpdateBoardDrop(delta)
+        self:UpdateGradeTextFX(delta)
+        self:UpdateCursor(delta)
     end
 
     @ExecSpace("ClientOnly")
     method void SetContainersActive(boolean on)
-        -- 루트 직속 컨테이너들을 한꺼번에 토글(board/시계/큐브선택/HUD). 판매가창은 별도(공개 완료 시만).
-        if isvalid(self.board) then self.board.Enable = on end
+        -- 루트 직속 컨테이너들을 한꺼번에 토글(큐브선택/HUD). 판매가창은 별도(공개 완료 시만).
+        -- board(복권)는 큐브 사용(낙하) 전까지 숨김 — 활성 진입 시에도 켜지 않는다(구매창만 노출).
+        if not on then
+            if isvalid(self.board) then self.board.Enable = false end
+            self.dropT = -1   -- 진행 중 낙하 취소
+        end
         -- 큐브 구매창은 슬라이드 상태로 관리(진입/이탈은 즉시 스냅). SetupScratch/OnAllRevealed이 인/아웃 애니메이션.
         self:SetCubeSelectShown(on, true)
         if not on and isvalid(self.priceWindow) then self.priceWindow.Enable = false end
@@ -470,6 +608,8 @@ script ScratchTicketManager extends Component
         -- 5/5(상환 미납)이면 큐브 구매창을 절대 노출하지 않는다(판매만 가능). 판매 버튼은 Board 소속이라 영향 없음.
         --   모든 노출 경로(진입/대기/공개완료)를 이 한 곳에서 차단한다.
         if shown and _GameManager.IsRepaymentDue then shown = false end
+        -- 구매창이 실제로 다시 노출되는 시점 = 재구매 허용(연출 종료/대기 복귀/재굴림 노출/활성 진입 공통 경로).
+        if shown then self.cubePurchasePending = false end
         if not isvalid(self.cubeSelect) or not isvalid(self.cubeSelect.UITransformComponent) then return end
         if not self.cubeBaseCaptured then
             self.cubeSelectBaseX = self.cubeSelect.UITransformComponent.anchoredPosition.x
@@ -511,8 +651,188 @@ script ScratchTicketManager extends Component
     end
 
     @ExecSpace("ClientOnly")
+    method void CacheGradeBg()
+        -- Board/Bg 스프라이트 컴포넌트 캐시 + 등급→배경 RUID 매핑 테이블 구성(OnBeginPlay 1회).
+        self.gradeBgMap = {
+            Common = self.CubeBGCommon,
+            Rare = self.CubeBGRare,
+            Epic = self.CubeBGEpic,
+            Unique = self.CubeBGUnique,
+            Legendary = self.CubeBGLegendary,
+        }
+        if isvalid(self.board) then
+            local bg = self.board:GetChildByName("Bg", false)
+            if isvalid(bg) and isvalid(bg.SpriteGUIRendererComponent) then
+                self.bgSprite = bg.SpriteGUIRendererComponent
+            end
+        end
+        -- 등급 텍스트: 라벨/애니 모드 매핑 + 베이스(위치·색) 캡처.
+        self.gradeTextLabel = {
+            Common = "Common Cube", Rare = "Rare Cube", Epic = "Epic Cube",
+            Unique = "Unique Cube", Legendary = "Legendary Cube",
+        }
+        -- Epic·Unique·Legendary 모두 발광(mode 2)으로 통일(부유/물결 폐기).
+        self.gradeTextAnim = { Common = 0, Rare = 0, Epic = 2, Unique = 2, Legendary = 2 }
+        if isvalid(self.ticketGradeText) and isvalid(self.ticketGradeText.Entity)
+            and isvalid(self.ticketGradeText.Entity.UITransformComponent) then
+            self.gradeTextBasePos = self.ticketGradeText.Entity.UITransformComponent.anchoredPosition
+            self.gradeTextBaseColor = self.ticketGradeText.FontColor
+            self.gradeTextBaseCaptured = true
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ApplyGradeBg(string grade)
+        -- 잠재 등급(Common/Rare/Epic/Unique/Legendary)에 맞는 복권 배경으로 교체. 미지 등급이면 기존 배경 유지.
+        if not isvalid(self.bgSprite) or self.gradeBgMap == nil then return end
+        local ruid = self.gradeBgMap[grade]
+        if ruid == nil or ruid == "" then
+            log_warning("[ScratchTicket] unknown grade for Bg: " .. tostring(grade))
+            return
+        end
+        self.bgSprite.ImageRUID = ruid
+        log("[ScratchTicket] grade Bg applied: " .. grade)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ApplyGradeText(string grade)
+        -- 등급 텍스트 라벨을 '<Grade> Cube'로 세팅 + 애니 모드 선택(Epic 부유/Unique 발광/Legendary 물결).
+        if not isvalid(self.ticketGradeText) then return end
+        self:RestoreGradeText()   -- 등급 전환 시 이전 애니 잔상 원복
+        if self.gradeTextLabel ~= nil then
+            local label = self.gradeTextLabel[grade]
+            if label ~= nil then
+                self.ticketGradeText.Text = label
+            else
+                log_warning("[ScratchTicket] unknown grade for text: " .. tostring(grade))
+            end
+        end
+        self.gradeTextMode = 0
+        if self.gradeTextAnim ~= nil and self.gradeTextAnim[grade] ~= nil then
+            self.gradeTextMode = self.gradeTextAnim[grade]
+        end
+        self.gradeTextTime = 0
+        log("[ScratchTicket] grade Text applied: " .. grade .. " mode=" .. tostring(self.gradeTextMode))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void RestoreGradeText()
+        -- 등급 텍스트를 베이스(위치·회전·스케일·색·발광 off)로 원복(애니 정지 시).
+        if not isvalid(self.ticketGradeText) then return end
+        if isvalid(self.ticketGradeText.Entity) and isvalid(self.ticketGradeText.Entity.UITransformComponent) then
+            local ui = self.ticketGradeText.Entity.UITransformComponent
+            if self.gradeTextBaseCaptured then ui.anchoredPosition = self.gradeTextBasePos end
+            ui.UIRotation = Vector3(0, 0, 0)
+            ui.UIScale = Vector3(1, 1, 1)
+        end
+        if self.gradeTextBaseColor ~= nil then self.ticketGradeText.FontColor = self.gradeTextBaseColor end
+        self.ticketGradeText.Underlay = false
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateGradeTextFX(number delta)
+        -- 등급별 텍스트 애니: 1=부유(Epic) / 2=발광(Unique) / 3=물결(Legendary). 0이면 정적(무동작).
+        if self.gradeTextMode == 0 then return end
+        if not isvalid(self.ticketGradeText) or not isvalid(self.ticketGradeText.Entity)
+            or not isvalid(self.ticketGradeText.Entity.UITransformComponent) then return end
+        self.gradeTextTime = self.gradeTextTime + delta
+        local ui = self.ticketGradeText.Entity.UITransformComponent
+        local base = self.gradeTextBasePos
+        local t = self.gradeTextTime
+        if self.gradeTextMode == 1 then
+            -- Epic: 수직 사인 부유(둥실둥실).
+            local period = self.GradeFloatPeriod > 0 and self.GradeFloatPeriod or 2.6
+            local offY = math.sin(t * 2 * math.pi / period) * self.GradeFloatAmp
+            ui.anchoredPosition = Vector2(base.x, base.y + offY)
+        elseif self.gradeTextMode == 2 then
+            -- Unique: 발광(소프트 헤일로 펄스 + 미세 브리딩).
+            local period = self.GradeGlowPeriod > 0 and self.GradeGlowPeriod or 1.1
+            local k = (math.sin(t * 2 * math.pi / period) + 1) * 0.5
+            local g = self.GradeGlowColor
+            self.ticketGradeText.Underlay = true
+            self.ticketGradeText.UnderlayOffsetX = 0
+            self.ticketGradeText.UnderlayOffsetY = 0
+            self.ticketGradeText.UnderlaySoftness = self.GradeGlowSoftness
+            self.ticketGradeText.UnderlayColor = Color(g.r, g.g, g.b, 0.35 + 0.65 * k)
+            self.ticketGradeText.UnderlayDilate = self.GradeGlowDilateMin + (self.GradeGlowDilateMax - self.GradeGlowDilateMin) * k
+            local s = 1 + (self.GradeGlowScaleMax - 1) * k
+            ui.UIScale = Vector3(s, s, 1)
+        elseif self.gradeTextMode == 3 then
+            -- Legendary: 물결(수직 사인 + 위상차 Z회전 진동).
+            local period = self.GradeWavePeriod > 0 and self.GradeWavePeriod or 1.3
+            local w = 2 * math.pi / period
+            local offY = math.sin(t * w) * self.GradeWaveAmp
+            local rot = math.sin(t * w + 0.6) * self.GradeWaveRotDeg
+            ui.anchoredPosition = Vector2(base.x, base.y + offY)
+            ui.UIRotation = Vector3(0, 0, rot)
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StartBoardDrop()
+        -- 복권(=board)을 제자리 위(offset)에서 제자리로 낙하시킨다(매 큐브 사용마다 재낙하).
+        if not isvalid(self.board) or not isvalid(self.board.UITransformComponent) then return end
+        self.board.Enable = true
+        self.boardDropStartY = self.boardRestY + self.BoardDropOffsetY
+        local ui = self.board.UITransformComponent
+        ui.anchoredPosition = Vector2(self.boardBaseX, self.boardDropStartY)
+        ui.UIScale = Vector3(1, 1, 1)
+        self.dropT = 0
+        self.boardLanded = false
+        self.scratchReady = false   -- 낙하 중 긁기 금지(착지 시 허용)
+        log("[ScratchTicket] board drop start y=" .. tostring(self.boardDropStartY) .. " -> " .. tostring(self.boardRestY))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateBoardDrop(number delta)
+        -- 낙하: ease-out으로 제자리로 내려오고, 착지 순간 OnBoardLanded 1회 트리거 후 짧은 팝.
+        if self.dropT < 0 then return end
+        if not isvalid(self.board) or not isvalid(self.board.UITransformComponent) then self.dropT = -1 return end
+        self.dropT = self.dropT + delta
+        local ui = self.board.UITransformComponent
+        local fallDur = self.BoardDropTime
+        if fallDur <= 0 then fallDur = 0.01 end
+        if self.dropT < fallDur then
+            local t = self.dropT / fallDur
+            local e = 1 - (1 - t) * (1 - t)   -- ease-out quad
+            local y = self.boardDropStartY + (self.boardRestY - self.boardDropStartY) * e
+            ui.anchoredPosition = Vector2(self.boardBaseX, y)
+            return
+        end
+        -- 착지 지점 스냅.
+        ui.anchoredPosition = Vector2(self.boardBaseX, self.boardRestY)
+        if not self.boardLanded then
+            self.boardLanded = true
+            self:OnBoardLanded()
+        end
+        -- 착지 팝(선택). 끝나면 낙하 종료.
+        local popDur = 0.18
+        if self.BoardLandPunch > 1 and self.dropT < fallDur + popDur then
+            local k = (self.dropT - fallDur) / popDur
+            local s = 1 + (self.BoardLandPunch - 1) * math.sin(k * math.pi)
+            ui.UIScale = Vector3(s, s, 1)
+        else
+            ui.UIScale = Vector3(1, 1, 1)
+            self.dropT = -1
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnBoardLanded()
+        -- 복권 착지 시점: 좌하단 구매창을 우측으로 슬라이드 아웃(사라짐) + 긁기 허용.
+        self:SetCubeSelectShown(false, false)
+        self.scratchReady = true
+        log("[ScratchTicket] board landed -> slide out cube window, scratch enabled")
+    end
+
+    @ExecSpace("ClientOnly")
     method void ResetToWaiting()
-        -- 큐브 사용 전 대기 상태: 중앙 큐브/옵션 3줄/판매가 숨김, 재사용·판매 비활성, 큐브 선택만 노출.
+        -- 큐브 사용 전 대기 상태: 복권(board) 숨김 + 중앙 큐브/옵션 3줄/판매가 숨김, 재사용·판매 비활성, 큐브 선택만 노출.
+        -- board는 큐브 선택(낙하) 전까지 감춰 둔다(처음엔 숨김 요구사항).
+        if isvalid(self.board) then self.board.Enable = false end
+        self.dropT = -1   -- 진행 중 낙하 취소
+        self.gradeTextMode = 0
+        self:RestoreGradeText()   -- 등급 텍스트 애니 정지 + 베이스 원복
         if isvalid(self.centerCube) then self.centerCube.Enable = false end
         if isvalid(self.ticket1) then self.ticket1.Enable = false end
         if isvalid(self.ticket2) then self.ticket2.Enable = false end
@@ -525,6 +845,8 @@ script ScratchTicketManager extends Component
         self.revealedCount = 0
         self.rainbowLines = {}
         self:InitLabelFX()
+        self:InitPrizeFX()
+        self:InitPrizeStars()
         self.destroyPending = false
         self.scratchReady = false   -- 대기 상태에서는 긁기 차단(큐브 사용 전 부스러기 방지).
         -- 판매가 카운트업/델타 상태 초기화(창은 숨김 유지).
@@ -562,6 +884,10 @@ script ScratchTicketManager extends Component
             }
         end
 
+        -- 등급별 복권 배경(용지) 교체 + 등급 텍스트 라벨/애니 — 낙하 전에 세팅해 올바른 등급으로 떨어지게 한다.
+        self:ApplyGradeBg(fields[2])
+        self:ApplyGradeText(fields[2])
+
         -- 중앙 큐브 아이콘 표시(마지막 선택 큐브). 실제 큐브 아트 본색.
         local cube = _BlacksmithConfig:GetCube(self.lastCubeType)
         if cube ~= nil then
@@ -587,9 +913,10 @@ script ScratchTicketManager extends Component
                     lui.UIRotation = Vector3(0, 0, 0)
                 end
             end
-            -- 바탕색: 처음엔 회색(공개 전). 공개 시 종류색으로 전환.
+            -- 바탕: 처음엔 Default 이미지(공개 전). 공개 시 종류별 이미지로 전환.
             if isvalid(prizes[i]) then
-                prizes[i].Color = Color(0.5, 0.5, 0.52, 1.0)
+                prizes[i].ImageRUID = self.PrizeImgDefault
+                prizes[i].Color = Color(1, 1, 1, 1)   -- 이미지 원색 표시(틴트 제거)
             end
             -- 은박 다시 덮기.
             self:RegisterTicket(i, foils[i])
@@ -598,15 +925,16 @@ script ScratchTicketManager extends Component
         self.revealedCount = 0
         self.rainbowLines = {}
         self:InitLabelFX()
+        self:InitPrizeFX()
+        self:InitPrizeStars()
         self.destroyPending = false
         -- 판매가 창을 큐브 사용 즉시 '기본 판매가'부터 표시(줄 공개마다 실시간 상승). (pricing §14)
         self.revealedBonusSum = 0
         self.priceFrozen = false
         self:ResetPriceDisplay(_GameManager.CurrentBasePrice)
         self:SetButtonEnabled(self.sellButton, false)
-        -- 큐브 사용 → 구매창을 보드 뒤로 슬라이드시켜 숨김(스크래치 몰입).
-        self:SetCubeSelectShown(false, false)
-        self.scratchReady = true   -- 은박 3줄 표시 완료 → 이제부터 긁기 허용.
+        -- 큐브 사용 → 복권을 하늘에서 낙하시킨다. 착지 시(OnBoardLanded) 구매창 슬라이드 아웃 + 긁기 허용.
+        self:StartBoardDrop()
         log("[ScratchTicket] setup scratch: grade=" .. (fields[2] or "?") .. " cube=" .. self.lastCubeType
             .. " base=" .. tostring(_GameManager.CurrentBasePrice))
     end
@@ -869,6 +1197,132 @@ script ScratchTicketManager extends Component
     end
 
     @ExecSpace("ClientOnly")
+    method void BuildStarPools()
+        -- 각 Prize 박스 아래 미리 만든 'Stars' 컨테이너의 별 스프라이트들을 박스별 풀로 수집(전부 비활성 시작).
+        -- 코인 풀(BuildCoinPool) 패턴 이식. 이탈 줄 공개 시 해당 박스만 이멧한다.
+        self.prizeStars = {}
+        self.starEmit = {}
+        local prizes = { self.prize1, self.prize2, self.prize3 }
+        for i = 1, 3 do
+            self.prizeStars[i] = {}
+            self.starEmit[i] = { active = false, timer = 0 }
+            local pr = prizes[i]
+            if isvalid(pr) and isvalid(pr.Entity) then
+                local cont = pr.Entity:GetChildByName("Stars", false)
+                if isvalid(cont) then
+                    for _, s in ipairs(cont.Children:ToTable()) do
+                        s.Enable = false
+                        local sprite = s.SpriteGUIRendererComponent
+                        if isvalid(sprite) and self.StarRUID ~= "" then sprite.ImageRUID = self.StarRUID end
+                        table.insert(self.prizeStars[i],
+                            { entity = s, ui = s.UITransformComponent, sprite = sprite,
+                              t = -1, dur = 1, active = false, baseSize = 24, spin = 0 })
+                    end
+                end
+            end
+        end
+        log("[ScratchTicket] star pools built")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void InitPrizeStars()
+        -- 전 별 비활성+숨김, 이멧 정지(대기/재스크래치 시 리셋). InitPrizeFX 패턴.
+        if self.prizeStars == nil then return end
+        for i = 1, 3 do
+            if self.starEmit ~= nil and self.starEmit[i] ~= nil then
+                self.starEmit[i].active = false
+                self.starEmit[i].timer = 0
+            end
+            for _, rec in ipairs(self.prizeStars[i]) do
+                rec.active = false
+                rec.t = -1
+                if isvalid(rec.entity) then rec.entity.Enable = false end
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StartPrizeStars(integer index)
+        -- 해당 박스의 별 이멧 시작(이탈 줄 공개 시). 이후 UpdatePrizeStars가 계속 생성.
+        if self.starEmit == nil or self.starEmit[index] == nil then return end
+        self.starEmit[index].active = true
+        log("[ScratchTicket] star emit start i=" .. tostring(index))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void EmitOneStar(integer index, any pr, any pool)
+        -- 풀에서 비활성 별 1개를 박스 내부 랜덤 위치·크기·수명·회전으로 켠다.
+        if pool == nil or not isvalid(pr) or not isvalid(pr.Entity) then return end
+        local box = pr.Entity.UITransformComponent
+        if not isvalid(box) then return end
+        local rs = box.RectSize
+        local halfX = math.max(0, rs.x * 0.5 - self.StarMarginX)
+        local halfY = math.max(0, rs.y * 0.5 - self.StarMarginY)
+        for _, rec in ipairs(pool) do
+            if not rec.active and isvalid(rec.ui) then
+                local rx = (_UtilLogic:RandomDouble() - 0.5) * 2 * halfX
+                local ry = (_UtilLogic:RandomDouble() - 0.5) * 2 * halfY
+                rec.ui.anchoredPosition = Vector2(rx, ry)
+                rec.baseSize = self.StarSizeMin + _UtilLogic:RandomDouble() * (self.StarSizeMax - self.StarSizeMin)
+                rec.dur = self.StarLifeMin + _UtilLogic:RandomDouble() * (self.StarLifeMax - self.StarLifeMin)
+                rec.spin = (_UtilLogic:RandomDouble() - 0.5) * 2 * self.StarMaxSpinDeg
+                rec.t = 0
+                rec.active = true
+                rec.entity.Enable = true
+                if self.StarSelfAnimated and isvalid(rec.sprite) then
+                    -- 자체 애니 클립: 고정 크기 + 원색 풀알파(코드 페이드 안 함) + 클립 재대입으로 프레임0부터 재생(별마다 desync).
+                    rec.ui.RectSize = Vector2(rec.baseSize, rec.baseSize)
+                    rec.ui.UIRotation = Vector3(0, 0, 0)
+                    rec.sprite.Color = Color(self.StarTint.r, self.StarTint.g, self.StarTint.b, 1)
+                    rec.sprite.ImageRUID = self.StarRUID
+                end
+                return
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdatePrizeStars(number delta)
+        -- 이멧 중인 박스는 간격마다 별 1개 생성 + 각 활성 별을 수명 만료 시 회수.
+        -- 자체 애니 클립(StarSelfAnimated)이면 클립이 스스로 반짝이므로 코드 트윙클 스킵, 정적 스프라이트면 알파 sin+스케일 팝+회전.
+        if self.prizeStars == nil then return end
+        local prizes = { self.prize1, self.prize2, self.prize3 }
+        for i = 1, 3 do
+            local pool = self.prizeStars[i]
+            local emit = self.starEmit[i]
+            if emit ~= nil and emit.active and self.StarSpawnInterval > 0 then
+                emit.timer = emit.timer + delta
+                while emit.timer >= self.StarSpawnInterval do
+                    emit.timer = emit.timer - self.StarSpawnInterval
+                    self:EmitOneStar(i, prizes[i], pool)
+                end
+            end
+            for _, rec in ipairs(pool) do
+                if rec.active and rec.t >= 0 then
+                    rec.t = rec.t + delta
+                    local k = 1.0
+                    if rec.dur > 0 then k = rec.t / rec.dur end
+                    if k >= 1.0 then
+                        rec.active = false
+                        rec.t = -1
+                        if isvalid(rec.entity) then rec.entity.Enable = false end
+                    elseif not self.StarSelfAnimated and isvalid(rec.ui) then
+                        -- 정적 스프라이트 전용 코드 트윙클(알파 sin + 스케일 팝 + 회전).
+                        local a = math.sin(k * math.pi)
+                        local sc = rec.baseSize * (0.45 + 0.55 * a)
+                        rec.ui.RectSize = Vector2(sc, sc)
+                        rec.ui.UIRotation = Vector3(0, 0, rec.spin * k)
+                        if isvalid(rec.sprite) then
+                            rec.sprite.Color = Color(self.StarTint.r, self.StarTint.g, self.StarTint.b, a)
+                        end
+                    end
+                    -- StarSelfAnimated면 클립이 스스로 페이드/반짝임 → 여기서 알파·스케일 손대지 않음.
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
     method void OnTouchBegin(ScreenTouchEvent event)
         -- 클릭 시작: 터치 지점에서 긁기.
         self:Scratch(event.TouchPoint, event.TouchId)
@@ -905,11 +1359,31 @@ script ScratchTicketManager extends Component
                     if u >= 0 and u <= 1 and v >= 0 and v <= 1 then
                         self:ApplyBrush(t, u, v)
                         self:SpawnCrumb(touchPoint)
+                        self.scratchTimer = 0.12   -- "지금 은박을 눌러 긁는 중" 표시(드래그 프레임마다 갱신 → 동색 유지)
                         return
                     end
                 end
             end
         end
+    end
+
+    @ExecSpace("ClientOnly")
+    method boolean IsSpecialLine(integer index)
+        -- 유효옵션/이탈/파괴 줄이면 true(여러 번 긁어야 하는 특수 줄). 잡옵/일반은 false.
+        -- 조합 보너스는 결과 단위라 줄 플래그와 무관 → 자동 제외(평소대로 긁힘).
+        if self.optionLines == nil then return false end
+        local o = self.optionLines[index]
+        if o == nil then return false end
+        return o.isValid or o.isBonus or o.isDestroy
+    end
+
+    @ExecSpace("ClientOnly")
+    method boolean IsPositiveLine(integer index)
+        -- 긍정 옵션(유효옵션/이탈) 줄이면 true. 파괴는 제외(파괴는 완료 기준을 올리지 않는다).
+        if self.optionLines == nil then return false end
+        local o = self.optionLines[index]
+        if o == nil then return false end
+        return (o.isValid or o.isBonus) and (not o.isDestroy)
     end
 
     @ExecSpace("ClientOnly")
@@ -921,7 +1395,10 @@ script ScratchTicketManager extends Component
         local cy = math.floor(v * H) + 1
         local R = self.BrushRadius
         local r2 = R * R
-        local dec = self.EraseStrength / 100.0
+        -- 줄 타입별 강도: 특수 옵션(유효/이탈/파괴)은 약하게 벗겨져 여러 번 긁어야 공개(잡옵은 기본 강도).
+        local strength = self.EraseStrength
+        if self:IsSpecialLine(t.index) then strength = self.EraseStrengthSpecial end
+        local dec = strength / 100.0
         if dec <= 0 then return end
         local fromX = math.max(1, math.floor(cx - R))
         local toX = math.min(W, math.ceil(cx + R))
@@ -947,7 +1424,10 @@ script ScratchTicketManager extends Component
                 end
             end
         end
-        if (not t.completed) and (t.cleared / t.total) >= self.CompletionThreshold then
+        -- 줄 타입별 완료 기준: 긍정 옵션(유효/이탈)은 더 많이 긁어야 공개(파괴/잡옵은 기본값).
+        local threshold = self.CompletionThreshold
+        if self:IsPositiveLine(t.index) then threshold = self.CompletionThresholdPositive end
+        if (not t.completed) and (t.cleared / t.total) >= threshold then
             self:CompleteTicket(t)
         end
     end
@@ -969,16 +1449,26 @@ script ScratchTicketManager extends Component
         local pr = prizes[index]
         if o ~= nil and isvalid(pr) then
             if o.isDestroy then
-                pr.Color = Color(0.55, 0.12, 0.12, 1.0)        -- 파괴 = 빨강
+                pr.ImageRUID = self.PrizeImgDestroy             -- 파괴
             elseif o.isValid and o.isBonus then
-                pr.Color = Color(0.62, 0.34, 0.92, 1.0)         -- 이탈 = 보라
+                pr.ImageRUID = self.PrizeImgBonus              -- 이탈
             elseif o.isValid then
-                pr.Color = Color(0.95, 0.82, 0.25, 1.0)         -- 유효 = 노랑
+                pr.ImageRUID = self.PrizeImgValid              -- 유효
             else
-                pr.Color = Color(0.42, 0.44, 0.48, 1.0)         -- 잡옵/비유효 = 회색
+                pr.ImageRUID = self.PrizeImgDefault            -- 잡옵/비유효: Default 유지
             end
+            pr.Color = Color(1, 1, 1, 1)                        -- 이미지 원색 표시(틴트 제거)
             if o.isValid then
                 table.insert(self.rainbowLines, index)          -- 무지개 글씨 대상
+            end
+            -- 유효 옵션(장비에 유효한 옵션 — 일반 유효 + 유효 이탈)만 시소 강조.
+            -- 비유효 이탈(예: 스태프+STR+12%, isValid=0/isBonus=1)은 제외.
+            if o.isValid and not o.isDestroy then
+                self:StartPrizeFX(index)
+            end
+            -- 이탈(제일 좋은 옵션)만 계속 반짝이는 별 이멧 시작.
+            if o.isValid and o.isBonus and not o.isDestroy then
+                self:StartPrizeStars(index)
             end
         end
         self.revealedCount = self.revealedCount + 1
@@ -1150,6 +1640,67 @@ script ScratchTicketManager extends Component
     end
 
     @ExecSpace("ClientOnly")
+    method void InitPrizeFX()
+        -- Prize 박스 3줄의 긍정 공개 강조(시소) 상태를 비활성으로 초기화.
+        self.prizeFX = {}
+        for i = 1, 3 do
+            self.prizeFX[i] = { t = -1, baseX = 0, baseY = 0 }
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StartPrizeFX(integer index)
+        -- 한 줄의 시소 강조 시작. 박스가 (0,0)이 아닐 수 있으므로 base 위치를 캡처해 그 기준으로 복귀한다.
+        if self.prizeFX == nil then self:InitPrizeFX() end
+        local fx = self.prizeFX[index]
+        if fx == nil then return end
+        fx.t = 0
+        local prizes = { self.prize1, self.prize2, self.prize3 }
+        local pr = prizes[index]
+        if isvalid(pr) and isvalid(pr.Entity) and isvalid(pr.Entity.UITransformComponent) then
+            local p = pr.Entity.UITransformComponent.anchoredPosition
+            fx.baseX = p.x
+            fx.baseY = p.y
+        end
+        log("[ScratchTicket] prize FX i=" .. tostring(index))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdatePrizeFX(number delta)
+        -- 활성 Prize 박스의 긍정 공개 강조: sin 펀치(살짝 확대) + 시소(중앙 고정 Z회전) + 좌우/위아래 sway,
+        -- 감쇠 envelope(1-k)로 종료 시 base 위치/스케일로 원상복귀.
+        if self.prizeFX == nil then return end
+        local prizes = { self.prize1, self.prize2, self.prize3 }
+        for i = 1, 3 do
+            local fx = self.prizeFX[i]
+            if fx ~= nil and fx.t >= 0 then
+                fx.t = fx.t + delta
+                local dur = self.PrizePunchTime
+                local k = 1.0
+                if dur > 0 then k = fx.t / dur end
+                local pr = prizes[i]
+                if isvalid(pr) and isvalid(pr.Entity) and isvalid(pr.Entity.UITransformComponent) then
+                    local ui = pr.Entity.UITransformComponent
+                    if k >= 1.0 then
+                        fx.t = -1
+                        ui.UIScale = Vector3(1, 1, 1)
+                        ui.UIRotation = Vector3(0, 0, 0)
+                        ui.anchoredPosition = Vector2(fx.baseX, fx.baseY)
+                    else
+                        local env = (1 - k)
+                        local s = 1 + (self.PrizePunchScale - 1) * math.sin(k * math.pi)
+                        ui.UIScale = Vector3(s, s, 1)
+                        ui.UIRotation = Vector3(0, 0, self.PrizeSeesawDeg * math.sin(k * math.pi * 3) * env)
+                        ui.anchoredPosition = Vector2(
+                            fx.baseX + self.PrizeSwayX * math.sin(k * math.pi * 3) * env,
+                            fx.baseY + self.PrizeSwayY * math.sin(k * math.pi * 4) * env)
+                    end
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
     method void StartLabelFX(integer index, number peak, number wobbleDeg, boolean shake)
         -- 한 줄의 공개 팝 연출 시작(스케일 펀치 + 선택적 회전 흔들림/파괴 지터).
         if self.labelFX == nil then self:InitLabelFX() end
@@ -1266,6 +1817,13 @@ script ScratchTicketManager extends Component
             log("[ScratchTicket] cube blocked: repayment due (sell only)")
             return
         end
+        -- 구매 요청~연출(복권 낙하 + 구매창 슬라이드아웃) 재생 중에는 재클릭을 차단(중복 구매 방지).
+        if self.cubePurchasePending then
+            log("[ScratchTicket] cube blocked: purchase/reveal animation in progress")
+            return
+        end
+        self.cubePurchasePending = true
+        self.cubePendingTimer = 0
         self.lastCubeType = cubeType
         log("[ScratchTicket] request use cube: " .. cubeType)
         _GameManager:RequestUseCube(cubeType)
@@ -1355,13 +1913,15 @@ script ScratchTicketManager extends Component
     @ExecSpace("ClientOnly")
     method void SetButtonEnabled(Entity e, boolean enabled)
         -- 버튼 활성/비활성(클릭 차단 + 알파 흐리게).
+        --   ⚠ 저작 알파(buttonBaseAlpha) 기준으로 조정한다 — 투명 배경(알파 0)은 계속 투명 유지(흰색으로 덮지 않음).
         if not isvalid(e) then return end
         local btn = e.ButtonComponent
         if isvalid(btn) then btn.Enable = enabled end
         local spr = e.SpriteGUIRendererComponent
         if isvalid(spr) then
+            local base = (self.buttonBaseAlpha ~= nil and self.buttonBaseAlpha[e]) or 1.0
             local c = spr.Color
-            spr.Color = Color(c.r, c.g, c.b, enabled and 1.0 or 0.35)
+            spr.Color = Color(c.r, c.g, c.b, enabled and base or (base * 0.35))
         end
     end
 
@@ -1387,6 +1947,66 @@ script ScratchTicketManager extends Component
     method void OnMasterExit(UITouchExitEvent event)
         -- 장인의 큐브 호버 종료.
         self.hoverMaster = false
+    end
+
+    @ExecSpace("ClientOnly")
+    method boolean IsCursorOverFoil()
+        -- 마우스 커서가 은박 3장 중 하나 위에 있는지 폴링 판정.
+        --   ⚠ 은박(Foil)은 PixelGUIRenderer만 있어 UI 레이캐스트 대상이 아니다 → UITouchEnter/Exit가 안 온다.
+        --   그래서 Scratch()와 동일한 좌표변환(스크린→월드 + foil 사각형 정규화)으로 직접 히트테스트한다.
+        if self.tickets == nil then return false end
+        local cursorPt = _InputService:GetCursorPosition()
+        local worldPt = _UILogic:ScreenToWorldPosition(cursorPt)
+        for i = 1, #self.tickets do
+            local t = self.tickets[i]
+            if t ~= nil and isvalid(t.ui) then
+                local ui = t.ui
+                local rs = ui.RectSize
+                local bl = _UILogic:LocalUIToWorldPosition(Vector2(-rs.x * 0.5, -rs.y * 0.5), ui)
+                local tr = _UILogic:LocalUIToWorldPosition(Vector2(rs.x * 0.5, rs.y * 0.5), ui)
+                local w = tr.x - bl.x
+                local h = tr.y - bl.y
+                if w ~= 0 and h ~= 0 then
+                    local u = (worldPt.x - bl.x) / w
+                    local v = (worldPt.y - bl.y) / h
+                    if u >= 0 and u <= 1 and v >= 0 and v <= 1 then return true end
+                end
+            end
+        end
+        return false
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateCursor(number delta)
+        -- 은박 커서 상태머신: 은박 밖=기본 / 은박 위 hover=금색 코인 / 누르고 긁는 중=동색 코인.
+        --   hover 판정은 커서 위치 폴링(IsCursorOverFoil) — 은박이 레이캐스트 대상이 아니라 이벤트가 안 오기 때문.
+        --   긁는 중 판정은 scratchTimer(>0)로 추론(은박은 release 이벤트가 없어 OnTouchHold가 매 프레임 갱신).
+        --   scratchReady일 때만(낙하 완료·긁기 가능 상태) 코인 커서를 노출한다.
+        if self.scratchTimer > 0 then self.scratchTimer = self.scratchTimer - delta end
+        local target = ""
+        if self.scratchReady and self:IsCursorOverFoil() then
+            if self.scratchTimer > 0 then target = "copper" else target = "gold" end
+        end
+        self:ApplyCursor(target)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ApplyCursor(string kind)
+        -- 커서 적용(디듀프 — 상태 변화 시에만 호출). RUID가 비어 있으면 기본 커서로 폴백(사용자 미입력 대비).
+        if kind == self.cursorNow then return end
+        self.cursorNow = kind
+        local ruid = ""
+        if kind == "gold" then
+            ruid = self.CursorGoldRUID
+        elseif kind == "copper" then
+            ruid = self.CursorCopperRUID
+        end
+        if ruid ~= "" then
+            _InputService:SetCursor(ruid, self.CursorHotspot)
+        else
+            _InputService:ResetCursor()
+        end
+        log("[ScratchTicket] cursor -> " .. (kind == "" and "default" or kind) .. " ruid=" .. tostring(ruid))
     end
 
     method string FormatOption(any o)
@@ -1432,6 +2052,7 @@ script ScratchTicketManager extends Component
         -- 입력/버튼/호버 구독 해제(필수).
         if self.touchHandler then _InputService:DisconnectEvent(ScreenTouchEvent, self.touchHandler) end
         if self.holdHandler then _InputService:DisconnectEvent(ScreenTouchHoldEvent, self.holdHandler) end
+        _InputService:ResetCursor()   -- 커서가 코인 상태로 남지 않도록 기본 복원.
         if self.clickRecords ~= nil then
             for _, rec in ipairs(self.clickRecords) do
                 if isvalid(rec.entity) then rec.entity:DisconnectEvent(ButtonClickEvent, rec.eventHandler) end

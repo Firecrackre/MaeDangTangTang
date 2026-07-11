@@ -27,6 +27,11 @@ script AugmentManager extends Logic
     property string reelStopSoundRUID = "972843e759204d3e9ad84e7d3fa94f83"
     property number sfxVolume = 1.0
 
+    -- ── 마우스 커서 RUID (인스펙터 SSOT — 사용자가 스프라이트 RUID 입력. 비우면 기본 커서 유지) ──
+    @DisplayName("커서: 구매버튼 호버(황금 망치)") property string CursorHammerRUID = ""      -- 구매 버튼 hover
+    @DisplayName("커서: 구매 클릭(망치 클릭)")     property string CursorHammerClickRUID = "" -- 구매 버튼 클릭 순간
+    property Vector2 CursorHotspot = Vector2(0, 0)   -- 커서 핫스팟(이미지 기준점 보정)
+
     -- ── UI 참조(UUID는 UIBuilder write({bind})로 주입) ──
     property Entity augmentRoot = "65d79d8b-810c-485f-bc42-cd88bac206f6"     -- AugmentGroup 루트(맵/화면 게이팅)
     property Entity choiceView = "a3477a16-a3e0-4fdb-b78e-fcfcf4650dad"      -- 3택 창 컨테이너
@@ -44,6 +49,12 @@ script AugmentManager extends Logic
     property string lastOwnedData = ""
     property Vector2 boardBasePos = Vector2(0, 0)
     property number shakeTime = 0
+
+    -- 구매버튼 커서 상태: hover 중 슬롯(0=없음)/클릭 이미지 잔여시간/현재 적용 커서("":기본/"hammer"/"click")
+    property integer hoverBuyIndex = 0
+    property number clickCursorTimer = 0
+    property string cursorNow = ""
+    property any buyHoverHandlers = nil   -- 구매버튼 enter/exit 핸들러(해제용)
 
     -- 스핀 상태(연출 전용 — 결과는 서버 확정).
     property boolean spinning = false
@@ -75,6 +86,7 @@ script AugmentManager extends Logic
         self.fxSlots = {}
         self.slotData = {}
         self.buyHandlers = {}
+        self.buyHoverHandlers = {}
         self.lastChoicesData = ""
         self.lastOwnedData = ""
         self.shakeTime = 0
@@ -146,6 +158,10 @@ script AugmentManager extends Logic
                 local idx = i
                 local h = btn:ConnectEvent(ButtonClickEvent, function() self:OnBuyClicked(idx) end)
                 table.insert(self.buyHandlers, { entity = btn, eventHandler = h })
+                -- 구매버튼 호버(마우스 커서 황금 망치 전환) 연결.
+                local ie = btn:ConnectEvent(UITouchEnterEvent, function() self:OnBuyEnter(idx) end)
+                local xe = btn:ConnectEvent(UITouchExitEvent, function() self:OnBuyExit(idx) end)
+                table.insert(self.buyHoverHandlers, { entity = btn, enterH = ie, exitH = xe })
             end
         end
     end
@@ -169,6 +185,15 @@ script AugmentManager extends Logic
         if self.closeOwnedHandler ~= nil and isvalid(self.btnCloseOwned) then
             self.btnCloseOwned.Entity:DisconnectEvent(ButtonClickEvent, self.closeOwnedHandler)
         end
+        if self.buyHoverHandlers ~= nil then
+            for _, rec in ipairs(self.buyHoverHandlers) do
+                if isvalid(rec.entity) then
+                    rec.entity:DisconnectEvent(UITouchEnterEvent, rec.enterH)
+                    rec.entity:DisconnectEvent(UITouchExitEvent, rec.exitH)
+                end
+            end
+        end
+        _InputService:ResetCursor()   -- 커서가 망치 상태로 남지 않도록 기본 복원.
     end
 
     @ExecSpace("ClientOnly")
@@ -196,6 +221,8 @@ script AugmentManager extends Logic
         if isvalid(self.choiceBoard) and isvalid(self.choiceBoard.UITransformComponent) then
             self.choiceBoard.UITransformComponent.anchoredPosition = self.boardBasePos
         end
+        self.hoverBuyIndex = 0
+        self:ApplyCursor("")   -- 페이지 종료 시 망치 커서 원복.
         log("[AugmentManager] close -> " .. self.prevScreen)
     end
 
@@ -209,6 +236,11 @@ script AugmentManager extends Logic
         if isvalid(self.augmentRoot) then self.augmentRoot.Enable = show end
         if not show then
             self.isActive = false
+            -- 페이지 숨김 시 망치 커서가 남지 않도록 기본 커서로 원복(1회, 디듀프).
+            if self.cursorNow ~= "" then
+                self.hoverBuyIndex = 0
+                self:ApplyCursor("")
+            end
             return
         end
         self.isActive = true
@@ -238,6 +270,9 @@ script AugmentManager extends Logic
         if isvalid(self.ownedView) and self.ownedView.Enable then
             self:RenderOwnedView()
         end
+
+        -- 구매버튼 커서(황금 망치) 상태 갱신.
+        self:UpdateCursor(delta)
 
         -- 구매 불가 클릭 시 보드 흔들림(0.5초).
         if self.shakeTime > 0 then
@@ -301,6 +336,7 @@ script AugmentManager extends Logic
         self.spinning = true
         self.spinTime = 0
         self.spinSlots = {}
+        self.hoverBuyIndex = 0   -- 스핀 중 버튼 비활성 → 이탈 이벤트 누락 대비 호버 상태 초기화(stuck 방지).
         for i = 1, count do
             self.spinSlots[i] = {
                 stopAt = self.SpinStopBase + (i - 1) * self.SpinStopGap,
@@ -535,6 +571,7 @@ script AugmentManager extends Logic
     method void OnBuyClicked(integer index)
         -- 구매: 메소 부족이면 클라 선차단(에러음+흔들림), 충분하면 서버 구매 요청(서버가 재검증·차감·재추첨).
         if self.spinning then return end
+        self.clickCursorTimer = 0.15   -- 클릭 순간 망치(클릭) 이미지 짧게 표시 후 hover(평상시)로 복귀.
         local sd = self.slotData[index]
         if sd == nil then return end
         if _GameManager.Meso < sd.cost then
@@ -547,6 +584,52 @@ script AugmentManager extends Logic
         _GameManager:RequestSelectAugment(sd.key)
         -- 구매 성공 시 서버가 AugmentsData/AugmentChoicesData를 갱신 → OnUpdate가 재추첨 스핀을 시작한다.
         log("[AugmentManager] request buy augment: " .. sd.key)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnBuyEnter(integer index)
+        -- 구매 버튼 진입: 커서 황금 망치 대상 슬롯 기록.
+        self.hoverBuyIndex = index
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnBuyExit(integer index)
+        -- 구매 버튼 이탈: 해당 슬롯 호버 해제(다른 슬롯로 옮겼으면 그 enter가 이미 갱신).
+        if self.hoverBuyIndex == index then self.hoverBuyIndex = 0 end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateCursor(number delta)
+        -- 구매버튼 커서 상태머신: 버튼 밖=기본 / 버튼 위 hover=황금 망치(평상시) / 클릭 직후=망치(클릭).
+        --   스핀 중이거나 버튼이 비활성(구매 불가)이면 기본 커서. 클릭 이미지는 clickCursorTimer 동안만.
+        if self.clickCursorTimer > 0 then self.clickCursorTimer = self.clickCursorTimer - delta end
+        local target = ""
+        if not self.spinning and self.hoverBuyIndex > 0 and self.buyButtons ~= nil then
+            local btn = self.buyButtons[self.hoverBuyIndex]
+            if isvalid(btn) and btn.Enable then
+                if self.clickCursorTimer > 0 then target = "click" else target = "hammer" end
+            end
+        end
+        self:ApplyCursor(target)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ApplyCursor(string kind)
+        -- 커서 적용(디듀프 — 상태 변화 시에만 호출). RUID가 비어 있으면 기본 커서로 폴백(사용자 미입력 대비).
+        if kind == self.cursorNow then return end
+        self.cursorNow = kind
+        local ruid = ""
+        if kind == "hammer" then
+            ruid = self.CursorHammerRUID
+        elseif kind == "click" then
+            ruid = self.CursorHammerClickRUID
+        end
+        if ruid ~= "" then
+            _InputService:SetCursor(ruid, self.CursorHotspot)
+        else
+            _InputService:ResetCursor()
+        end
+        log("[AugmentManager] cursor -> " .. (kind == "" and "default" or kind))
     end
 
     @ExecSpace("ClientOnly")

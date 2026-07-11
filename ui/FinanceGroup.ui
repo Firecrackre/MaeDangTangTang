@@ -4197,7 +4197,7 @@
           "path": "/ui/FinanceGroup/ConfirmPopup",
           "nameEditable": true,
           "enable": true,
-          "visible": true,
+          "visible": false,
           "localize": true,
           "displayOrder": 2,
           "pathConstraints": "///",
