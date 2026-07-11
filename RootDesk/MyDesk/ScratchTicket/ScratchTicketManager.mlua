@@ -59,6 +59,14 @@ script ScratchTicketManager extends Component
     -- 코인 낙하 풀(특별 수치 연출). CrumbLayer 패턴. UUID는 UIBuilder가 주입.
     property Entity coinLayer = "721cd088-6a34-4312-87e6-86af26b4ad8b"
 
+    -- 포커스 스포트라이트 어둠 레이어(이탈/파괴 줄 긁는 중 — Top/Bottom/Left/Right 스트립 4장 컨테이너). UUID는 UIBuilder가 주입.
+    property Entity focusDimLayer = "25627d38-9de1-4f77-b0dc-811d9632ecda"
+
+    -- 이탈(유효+보너스) 줄 공개 순간 1회 터지는 폭죽 파티클(UIBasicParticle Firework). UUID는 UIBuilder가 주입.
+    property Entity fireworkFX = "a9adaf51-6ac0-4086-87d1-4b3d80ef0149"
+    @DisplayName("폭죽 위치 오프셋 Y(px)")
+    property number FireworkOffsetY = 0   -- 공개된 줄 중심 기준 폭죽 발사 위치 보정(+위)
+
     -- 판매 결과 창(수령하기) — 판매 확정 → 무기 아이콘+판매가 표시 → 수령. UUID는 UIBuilder가 주입.
     property Entity saleResultGroup = "d0722bc8-8d08-41a3-8ec8-e15a2073f457"
     property Entity saleWeaponIcon = "1fdbda69-49f4-4637-98fe-4c8c927366b0"
@@ -161,6 +169,14 @@ script ScratchTicketManager extends Component
     property integer CoinCountValid = 6         -- 유효 옵션 공개 시 방출 코인 수
     property integer CoinCountBonus = 12        -- 이탈 옵션 공개 시 방출 코인 수
     property integer CoinCountFinal = 20        -- 3줄 완료(대박) 시 방출 코인 수
+
+    -- ===== 포커스 스포트라이트 튜닝(이탈/파괴 줄 긁는 중 줌인+어두워짐) (인스펙터 SSOT) =====
+    property number FocusMaxZoom = 1.35         -- 완료 직전 최대 줌 배율(보드 가짜 카메라)
+    property number FocusDimMaxAlpha = 0.82     -- 완료 직전 주변 어둠 최대 알파
+    property number FocusEaseSpeed = 3.0        -- 줌/이동/어둠이 목표로 수렴하는 속도(1/s, 지수 lerp — 천천히 이동)
+    property number FocusHolePadding = 26       -- 포커스 줄 주위 밝은 창 여백(px)
+    property Color FocusDimColor = Color(0, 0, 0, 1)           -- 이탈 줄 어둠 색(알파는 긁기 진행률이 결정)
+    property Color FocusDimColorDestroy = Color(0.06, 0, 0, 1) -- 파괴 줄 어둠 색(불안한 검붉음)
 
     -- ===== 효과음 RUID (WeaponShopManager 재사용 + msw-search 코인음) =====
     property string SfxClick = "972843e759204d3e9ad84e7d3fa94f83"  -- 잡옵/기본 공개음
@@ -269,6 +285,14 @@ script ScratchTicketManager extends Component
     property any prizeStars = nil        -- [박스1~3] = 별 레코드 풀 {entity,ui,sprite,t,dur,active,baseSize,spin}
     property any starEmit = nil          -- [박스1~3] = { active=bool, timer=number } (이탈 박스만 이멧)
 
+    -- 포커스 스포트라이트 런타임 상태(이탈/파괴 줄 긁는 중 줌인+어두워짐).
+    property integer focusIndex = 0      -- 0=비활성, 1~3=포커스 중인 줄
+    property number focusZoomCur = 1.0   -- 현재 줌(수렴 중간값)
+    property number focusDimCur = 0.0    -- 현재 어둠 알파(수렴 중간값)
+    property number focusPanX = 0        -- 현재 보드 팬 오프셋 X(수렴 중간값)
+    property number focusPanY = 0        -- 현재 보드 팬 오프셋 Y(수렴 중간값)
+    property any focusStrips = nil       -- {Top,Bottom,Left,Right} = {ui,sprite} 스트립 캐시
+
     @ExecSpace("ClientOnly")
     method void OnBeginPlay()
         -- 큐브 스크래치 UI 초기화: 설정 로드 → foil/크럼 구성 → 입력/버튼/호버 연결 → 대기 상태로 숨김.
@@ -281,6 +305,7 @@ script ScratchTicketManager extends Component
         self:BuildCrumbPool()
         self:BuildCoinPool()
         self:BuildStarPools()
+        self:CacheFocusStrips()
 
         self.clickRecords = {}
         self.enterRecords = {}
@@ -486,7 +511,10 @@ script ScratchTicketManager extends Component
         if isvalid(self.cubeSelect) and isvalid(self.cubeSelect.UITransformComponent) then
             _UILogic:SetSiblingIndex(self.cubeSelect.UITransformComponent, 0)
         end
-        -- 앞으로 끌어올 순서: 부스러기 → 코인 → 판매결과 창(마지막 호출이 가장 앞).
+        -- 앞으로 끌어올 순서: 포커스 어둠 → 폭죽 → 부스러기 → 코인 → 판매결과 창(마지막 호출이 가장 앞).
+        --   FocusDim은 보드 위·부스러기 아래: 긁는 부스러기/코인은 어둠 위에 보인다. 폭죽은 보드 위에서 터진다.
+        self:BringToFront(self.focusDimLayer)
+        self:BringToFront(self.fireworkFX)
         self:BringToFront(self.crumbLayer)
         self:BringToFront(self.coinLayer)
         self:BringToFront(self.saleResultGroup)
@@ -569,6 +597,7 @@ script ScratchTicketManager extends Component
         end
 
         self:UpdateHoverFX(delta)
+        self:UpdateFocus(delta)
         self:UpdateRainbow(delta)
         self:UpdateLabelFX(delta)
         self:UpdatePrizeFX(delta)
@@ -598,6 +627,7 @@ script ScratchTicketManager extends Component
         if not on then self:HideConfirmSell() end
         if not on then self:HideSaleResult() end
         if not on then self:StopCoins() end
+        if not on then self:EndFocus() end             -- 포커스 스포트라이트 잔상 방지(줌/어둠 원복).
         if not on then self.scratchReady = false end   -- 맵 이탈/아이템 없음 → 긁기 차단.
     end
 
@@ -831,6 +861,7 @@ script ScratchTicketManager extends Component
         -- board는 큐브 선택(낙하) 전까지 감춰 둔다(처음엔 숨김 요구사항).
         if isvalid(self.board) then self.board.Enable = false end
         self.dropT = -1   -- 진행 중 낙하 취소
+        self:EndFocus()   -- 포커스 스포트라이트 원복(줌/팬/어둠)
         self.gradeTextMode = 0
         self:RestoreGradeText()   -- 등급 텍스트 애니 정지 + 베이스 원복
         if isvalid(self.centerCube) then self.centerCube.Enable = false end
@@ -865,6 +896,7 @@ script ScratchTicketManager extends Component
     method void SetupScratch(string pdata)
         -- 큐브 사용 결과를 받아 옵션 3줄을 은박으로 덮어 표시(긁기 시작 가능 상태). 잠재 데이터 파싱.
         -- pdata = "cubeCount;grade;line;line;line", line = "label|value|unit|optionType|isBonus|isDestroy|isValid"
+        self:EndFocus()   -- 재굴림 시 이전 포커스 스포트라이트 잔상 원복
         local fields = self:Split(pdata, ";")
         if #fields < 5 then return end
         -- fields[1]=cubeCount, fields[2]=grade, fields[3..5]=lines
@@ -1357,6 +1389,12 @@ script ScratchTicketManager extends Component
                     local u = (worldPt.x - bl.x) / w
                     local v = (worldPt.y - bl.y) / h
                     if u >= 0 and u <= 1 and v >= 0 and v <= 1 then
+                        -- 포커스 스포트라이트 중에는 포커스 줄만 긁기 허용(다른 줄은 어둠에 가려 있음).
+                        if self.focusIndex > 0 and self.focusIndex ~= t.index then return end
+                        -- 이탈(유효+보너스)/파괴 줄 첫 긁기 → 스포트라이트(줌인+어두워짐) 시작.
+                        if self.focusIndex == 0 and self:IsFocusLine(t.index) then
+                            self:StartFocus(t.index)
+                        end
                         self:ApplyBrush(t, u, v)
                         self:SpawnCrumb(touchPoint)
                         self.scratchTimer = 0.12   -- "지금 은박을 눌러 긁는 중" 표시(드래그 프레임마다 갱신 → 동색 유지)
@@ -1384,6 +1422,174 @@ script ScratchTicketManager extends Component
         local o = self.optionLines[index]
         if o == nil then return false end
         return (o.isValid or o.isBonus) and (not o.isDestroy)
+    end
+
+    @ExecSpace("ClientOnly")
+    method boolean IsFocusLine(integer index)
+        -- 포커스 스포트라이트 대상 줄: 이탈(유효+보너스) 또는 파괴. 일반 유효/잡옵은 제외.
+        if self.optionLines == nil then return false end
+        local o = self.optionLines[index]
+        if o == nil then return false end
+        return (o.isValid and o.isBonus) or o.isDestroy
+    end
+
+    @ExecSpace("ClientOnly")
+    method void CacheFocusStrips()
+        -- FocusDim 자식 스트립 4장(Top/Bottom/Left/Right)의 ui/sprite 캐시 + 시작은 레이어 숨김.
+        --   .ui에서 켜진 채 저작(꺼진 자식은 GetChildByName 캐시 누락 위험) → 여기서 끈다(SparkleFX 패턴).
+        self.focusStrips = nil
+        if not isvalid(self.focusDimLayer) then return end
+        local strips = {}
+        local found = 0
+        for _, nm in ipairs({ "Top", "Bottom", "Left", "Right" }) do
+            local e = self.focusDimLayer:GetChildByName(nm, false)
+            if isvalid(e) then
+                strips[nm] = { ui = e.UITransformComponent, sprite = e.SpriteGUIRendererComponent }
+                found = found + 1
+            end
+        end
+        self.focusStrips = strips
+        self.focusDimLayer.Enable = false
+        log("[ScratchTicket] focus strips cached: " .. tostring(found))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StartFocus(integer index)
+        -- 포커스 스포트라이트 시작(이탈/파괴 줄 첫 긁기). 어둠은 알파 0에서 시작해 긁기 진행률 따라 짙어진다.
+        self.focusIndex = index
+        self.focusZoomCur = 1.0
+        self.focusDimCur = 0.0
+        self.focusPanX = 0
+        self.focusPanY = 0
+        -- 첫 프레임 검은 화면 플래시 방지: 스트립 알파 0으로 초기화 후 레이어를 켠다.
+        if self.focusStrips ~= nil then
+            local c = self.FocusDimColor
+            for _, nm in ipairs({ "Top", "Bottom", "Left", "Right" }) do
+                local rec = self.focusStrips[nm]
+                if rec ~= nil and isvalid(rec.sprite) then
+                    rec.sprite.Color = Color(c.r, c.g, c.b, 0)
+                end
+            end
+        end
+        if isvalid(self.focusDimLayer) then self.focusDimLayer.Enable = true end
+        log("[ScratchTicket] focus start i=" .. tostring(index))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void EndFocus()
+        -- 포커스 스포트라이트 즉시 원상복구: 어둠 레이어 숨김 + (포커스 중이었으면) 보드 줌/팬 원위치.
+        -- OnLineRevealed 맨 앞에서 호출 → 이후 시소/파괴 연출이 원위치 기준으로 재생된다.
+        if isvalid(self.focusDimLayer) and self.focusDimLayer.Enable then
+            self.focusDimLayer.Enable = false
+        end
+        if self.focusIndex == 0 then return end
+        self.focusIndex = 0
+        self.focusZoomCur = 1.0
+        self.focusDimCur = 0.0
+        self.focusPanX = 0
+        self.focusPanY = 0
+        if isvalid(self.board) and isvalid(self.board.UITransformComponent) then
+            local bui = self.board.UITransformComponent
+            bui.UIScale = Vector3(1, 1, 1)
+            bui.anchoredPosition = Vector2(self.boardBaseX, self.boardRestY)
+        end
+        log("[ScratchTicket] focus end -> restored")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void PlayFirework(integer index)
+        -- 이탈(유효+보너스) 줄 공개 순간 폭죽 1회 발사: FX를 해당 줄 위치로 옮기고 Play.
+        -- (Loop=false·PlayOnEnable=false 저작 → Play() 호출 시에만 한 번 터진다. 프리셋/크기 튜닝은 .ui 엔티티 인스펙터.)
+        if not isvalid(self.fireworkFX) then return end
+        local p = self.fireworkFX.UIBasicParticleComponent
+        if not isvalid(p) then return end
+        local rows = { self.ticket1, self.ticket2, self.ticket3 }
+        local row = rows[index]
+        if isvalid(row) and isvalid(row.UITransformComponent) and isvalid(self.fireworkFX.UITransformComponent) then
+            local lp = row.UITransformComponent.anchoredPosition
+            -- 공개 시점은 EndFocus 직후라 보드는 원위치(줌 1) — 줄의 그룹 좌표 = base + 로컬.
+            self.fireworkFX.UITransformComponent.anchoredPosition =
+                Vector2(self.boardBaseX + lp.x, self.boardRestY + lp.y + self.FireworkOffsetY)
+        end
+        self.fireworkFX.Enable = true
+        p:Play()
+        log("[ScratchTicket] firework at line " .. tostring(index))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateFocus(number delta)
+        -- 포커스 스포트라이트: 보드(가짜 카메라)를 포커스 줄 중심으로 천천히 팬/줌 + 주변 어둠 스트립 갱신.
+        -- 줌·어둠 목표는 긁기 진행률(완료 기준 대비 벗겨진 비율)에 비례 → 긁을수록 점점 줌인.
+        if self.focusIndex == 0 then return end
+        if self.dropT >= 0 or self.destroyPending then return end   -- 낙하/파괴 연출과 보드 transform 경합 방지
+        local t = nil
+        if self.tickets ~= nil then t = self.tickets[self.focusIndex] end
+        local o = nil
+        if self.optionLines ~= nil then o = self.optionLines[self.focusIndex] end
+        local rows = { self.ticket1, self.ticket2, self.ticket3 }
+        local row = rows[self.focusIndex]
+        if t == nil or o == nil or not isvalid(row) or not isvalid(row.UITransformComponent)
+            or not isvalid(self.board) or not isvalid(self.board.UITransformComponent) then return end
+        -- 진행률 0~1: 줄 타입별 완료 기준 재사용(ApplyBrush와 동일 분기 — 이탈=Positive, 파괴=기본).
+        local threshold = self.CompletionThreshold
+        if self:IsPositiveLine(self.focusIndex) then threshold = self.CompletionThresholdPositive end
+        local p = 0
+        if threshold > 0 and t.total > 0 then p = (t.cleared / t.total) / threshold end
+        if p > 1 then p = 1 end
+        -- 목표: 줌/어둠(진행률 비례) + 팬(포커스 줄이 화면 중앙으로).
+        local localPos = row.UITransformComponent.anchoredPosition
+        local zoomT = 1 + (self.FocusMaxZoom - 1) * p
+        local dimT = self.FocusDimMaxAlpha * p
+        local panTX = -zoomT * localPos.x
+        local panTY = -zoomT * localPos.y
+        -- 지수 lerp 수렴("천천히 이동").
+        local k = self.FocusEaseSpeed * delta
+        if k > 1 then k = 1 end
+        self.focusZoomCur = self.focusZoomCur + (zoomT - self.focusZoomCur) * k
+        self.focusDimCur = self.focusDimCur + (dimT - self.focusDimCur) * k
+        self.focusPanX = self.focusPanX + (panTX - self.focusPanX) * k
+        self.focusPanY = self.focusPanY + (panTY - self.focusPanY) * k
+        -- 보드(가짜 카메라) 적용.
+        local bui = self.board.UITransformComponent
+        bui.UIScale = Vector3(self.focusZoomCur, self.focusZoomCur, 1)
+        bui.anchoredPosition = Vector2(self.boardBaseX + self.focusPanX, self.boardRestY + self.focusPanY)
+        -- 스포트라이트 창: 포커스 줄 사각형(그룹 좌표 = 보드위치 + 줌×로컬) 주위를 스트립 4장이 감싼다.
+        local cx = self.boardBaseX + self.focusPanX + self.focusZoomCur * localPos.x
+        local cy = self.boardRestY + self.focusPanY + self.focusZoomCur * localPos.y
+        local rs = row.UITransformComponent.RectSize
+        local halfW = rs.x * 0.5 * self.focusZoomCur + self.FocusHolePadding
+        local halfH = rs.y * 0.5 * self.focusZoomCur + self.FocusHolePadding
+        self:ApplyFocusStrips(cx, cy, halfW, halfH, o.isDestroy)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ApplyFocusStrips(number cx, number cy, number halfW, number halfH, boolean isDestroy)
+        -- 화면(1920×1080, 중앙 원점) 전체를 덮되 포커스 줄 사각형만 뚫린 창이 되도록 스트립 4장 배치.
+        if self.focusStrips == nil then return end
+        local col = self.FocusDimColor
+        if isDestroy then col = self.FocusDimColorDestroy end
+        local a = self.focusDimCur
+        local top = cy + halfH
+        local bottom = cy - halfH
+        local left = cx - halfW
+        local right = cx + halfW
+        self:SetStrip(self.focusStrips.Top, 0, (top + 540) * 0.5, 1920, 540 - top, col, a)
+        self:SetStrip(self.focusStrips.Bottom, 0, (bottom - 540) * 0.5, 1920, bottom + 540, col, a)
+        self:SetStrip(self.focusStrips.Left, (left - 960) * 0.5, cy, left + 960, halfH * 2, col, a)
+        self:SetStrip(self.focusStrips.Right, (right + 960) * 0.5, cy, 960 - right, halfH * 2, col, a)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SetStrip(any rec, number cx, number cy, number w, number h, any col, number alpha)
+        -- 스트립 1장 배치+색 적용. 음수 크기는 0으로 클램프(창이 화면 밖으로 나갈 때).
+        if rec == nil or not isvalid(rec.ui) then return end
+        if w < 0 then w = 0 end
+        if h < 0 then h = 0 end
+        rec.ui.anchoredPosition = Vector2(cx, cy)
+        rec.ui.RectSize = Vector2(w, h)
+        if isvalid(rec.sprite) then
+            rec.sprite.Color = Color(col.r, col.g, col.b, alpha)
+        end
     end
 
     @ExecSpace("ClientOnly")
@@ -1443,6 +1649,9 @@ script ScratchTicketManager extends Component
     @ExecSpace("ClientOnly")
     method void OnLineRevealed(integer index)
         -- 한 줄 공개: 종류별 바탕색 전환 + 유효옵션이면 무지개/출렁 등록. 3줄 완료 시 최종 처리.
+        -- 포커스 스포트라이트 즉시 원상복구(줌아웃+어둠 해제) — 이후 시소(StartPrizeFX)/파괴 연출이
+        -- 원위치 기준으로 재생되도록 반드시 이 시점(연출 시작 전)에 복구한다.
+        self:EndFocus()
         local o = nil
         if self.optionLines ~= nil then o = self.optionLines[index] end
         local prizes = { self.prize1, self.prize2, self.prize3 }
@@ -1466,9 +1675,10 @@ script ScratchTicketManager extends Component
             if o.isValid and not o.isDestroy then
                 self:StartPrizeFX(index)
             end
-            -- 이탈(제일 좋은 옵션)만 계속 반짝이는 별 이멧 시작.
+            -- 이탈(제일 좋은 옵션)만 계속 반짝이는 별 이멧 시작 + 공개 순간 폭죽 1회.
             if o.isValid and o.isBonus and not o.isDestroy then
                 self:StartPrizeStars(index)
+                self:PlayFirework(index)
             end
         end
         self.revealedCount = self.revealedCount + 1
