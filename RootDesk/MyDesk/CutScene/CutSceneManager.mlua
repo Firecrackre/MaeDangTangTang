@@ -116,7 +116,7 @@ script CutSceneManager extends Logic
 
     @ExecSpace("ClientOnly")
     method void InitPanels()
-        -- 패널 풀 배열 구성 + 전부 숨김/알파0/스케일1.
+        -- 패널 풀 배열 구성 + 전부 강제 숨김(알파0/스케일1/이미지 클리어).
         self._T.panels = { self.panel1, self.panel2, self.panel3, self.panel4, self.panel5, self.panel6 }
         self._T.pAlpha = {}
         self._T.pTarget = {}
@@ -124,21 +124,30 @@ script CutSceneManager extends Logic
         self._T.pScale = {}
         self._T.pScaleTarget = {}
         self._T.panelCursor = 0
-        for i, p in ipairs(self._T.panels) do
-            self._T.pAlpha[i] = 0
-            self._T.pTarget[i] = 0
-            self._T.pActive[i] = false
-            self._T.pScale[i] = 1
-            self._T.pScaleTarget[i] = 1
-            if isvalid(p) then
-                p.Enable = false
-                if isvalid(p.SpriteGUIRendererComponent) then
-                    p.SpriteGUIRendererComponent.Color = Color(1, 1, 1, 0)
-                end
-                if isvalid(p.UITransformComponent) then
-                    p.UITransformComponent.UIScale = Vector3(1, 1, 1)
-                end
-            end
+        self._T.pendingHardClear = false
+        for i, _ in ipairs(self._T.panels) do
+            self:HardHidePanel(i)
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void HardHidePanel(integer i)
+        -- 패널 i를 즉시 완전 숨김: Enable 끔 + 알파0 + ImageRUID 클리어(재사용 슬롯에 이전 컷 텍스처가
+        -- 남아 페이드 인 초반에 잠깐 비치는 플래시 방지) + 스케일/상태 리셋.
+        self._T.pAlpha[i] = 0
+        self._T.pTarget[i] = 0
+        self._T.pActive[i] = false
+        self._T.pScale[i] = 1
+        self._T.pScaleTarget[i] = 1
+        local p = self._T.panels[i]
+        if not isvalid(p) then return end
+        p.Enable = false
+        if isvalid(p.SpriteGUIRendererComponent) then
+            p.SpriteGUIRendererComponent.Color = Color(1, 1, 1, 0)
+            p.SpriteGUIRendererComponent.ImageRUID = ""
+        end
+        if isvalid(p.UITransformComponent) then
+            p.UITransformComponent.UIScale = Vector3(1, 1, 1)
         end
     end
 
@@ -222,6 +231,14 @@ script CutSceneManager extends Logic
     @ExecSpace("ClientOnly")
     method void RevealScene(any scene)
         -- 다음 패널 슬롯에 컷 이미지 세팅 후 페이드 인(+옵션 스케일 팝 +컷별 사운드).
+        -- 그룹 경계(CLEAR) 직후 첫 컷: 이전 페이지 컷이 아직 페이드 아웃 중이어도 전부 즉시 숨겨
+        -- 다음 페이지가 항상 빈 화면에서 시작하도록 보장.
+        if self._T.pendingHardClear then
+            self._T.pendingHardClear = false
+            for i, _ in ipairs(self._T.panels) do
+                self:HardHidePanel(i)
+            end
+        end
         self._T.panelCursor = self._T.panelCursor + 1
         local i = self._T.panelCursor
         local p = self._T.panels[i]
@@ -255,12 +272,14 @@ script CutSceneManager extends Logic
     @ExecSpace("ClientOnly")
     method void ClearPanels()
         -- 현재 활성 패널 전부 페이드 아웃(완료 시 UpdatePanels가 Enable=false) + 커서 리셋 + 장 넘김음.
+        -- 페이드 아웃 연출은 유지하되, 다음 reveal 시점에 잔여 패널 강제 숨김을 예약(pendingHardClear).
         if self._T.panels ~= nil then
             for i, p in ipairs(self._T.panels) do
                 if self._T.pActive[i] then self._T.pTarget[i] = 0 end
             end
         end
         self._T.panelCursor = 0
+        self._T.pendingHardClear = true
         if self.PageTurnSfxRUID ~= nil and self.PageTurnSfxRUID ~= "" then
             _SoundService:PlaySound(self.PageTurnSfxRUID, self.SfxVolume)
         end
@@ -286,8 +305,12 @@ script CutSceneManager extends Logic
                         p.SpriteGUIRendererComponent.Color = Color(1, 1, 1, a)
                     end
                     if a <= 0.001 and t <= 0 then
+                        -- 숨김 확정 시 ImageRUID도 비워 슬롯 재사용 때 이전 컷 플래시 차단.
                         p.Enable = false
                         self._T.pActive[i] = false
+                        if isvalid(p.SpriteGUIRendererComponent) then
+                            p.SpriteGUIRendererComponent.ImageRUID = ""
+                        end
                     end
                 end
                 local sc = self._T.pScale[i]

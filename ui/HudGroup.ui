@@ -24,7 +24,7 @@
           "enable": true,
           "visible": true,
           "localize": true,
-          "displayOrder": 4,
+          "displayOrder": 3,
           "pathConstraints": "//",
           "revision": 0,
           "origin": {
@@ -4457,12 +4457,12 @@
               },
               "MobileOnly": false,
               "OffsetMax": {
-                "x": 120.0,
-                "y": -18.0
+                "x": 683.0,
+                "y": -30.0
               },
               "OffsetMin": {
-                "x": 24.0,
-                "y": -114.0
+                "x": 587.0,
+                "y": -126.0
               },
               "Pivot": {
                 "x": 0.5,
@@ -4480,12 +4480,12 @@
               },
               "UIVersion": 2,
               "anchoredPosition": {
-                "x": 72.0,
-                "y": -18.0
+                "x": 635.0,
+                "y": -30.0
               },
               "Position": {
-                "x": 72.0,
-                "y": 522.0,
+                "x": 635.0,
+                "y": 510.0,
                 "z": 0.0
               },
               "QuaternionRotation": {

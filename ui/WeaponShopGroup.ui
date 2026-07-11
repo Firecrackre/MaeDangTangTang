@@ -24,7 +24,7 @@
           "enable": true,
           "visible": true,
           "localize": true,
-          "displayOrder": 3,
+          "displayOrder": 2,
           "pathConstraints": "//",
           "revision": 0,
           "origin": {
@@ -552,8 +552,8 @@
           "name": "RefreshButton",
           "path": "/ui/WeaponShopGroup/Board/RefreshButton",
           "nameEditable": true,
-          "enable": true,
-          "visible": true,
+          "enable": false,
+          "visible": false,
           "localize": true,
           "displayOrder": 1,
           "pathConstraints": "////",
@@ -2645,7 +2645,7 @@
               "PlayOnEnable": true,
               "PlaySpeed": 1.0,
               "Prewarm": false,
-              "RandomSeed": 3857067635,
+              "RandomSeed": 2907756341,
               "Enable": true
             }
           ],
@@ -4646,7 +4646,7 @@
               "PlayOnEnable": true,
               "PlaySpeed": 1.0,
               "Prewarm": false,
-              "RandomSeed": 2238774421,
+              "RandomSeed": 872241861,
               "Enable": true
             }
           ],
@@ -6647,7 +6647,7 @@
               "PlayOnEnable": true,
               "PlaySpeed": 1.0,
               "Prewarm": false,
-              "RandomSeed": 514654510,
+              "RandomSeed": 1608566018,
               "Enable": true
             }
           ],
