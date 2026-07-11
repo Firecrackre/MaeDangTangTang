@@ -570,8 +570,10 @@ script ScratchTicketManager extends Component
         -- 게이팅 + 상태 폴링 + 연출 갱신.
         local lp = _UserService.LocalPlayer
         local onMap = isvalid(lp) and lp.CurrentMapName == self.TargetMapName
-        -- 아이템 보유 중일 때만 스크래치 UI 활성(없으면 상점이 보임). 재정 관리 페이지가 열리면 숨긴다.
-        local financeOpen = isvalid(_LobbyManager) and _LobbyManager.ActiveScreen == "finance"
+        -- 아이템 보유 중일 때만 스크래치 UI 활성(없으면 상점이 보임). 재정 관리/시즌 패스 모달이 열리면 숨긴다
+        --   (모달 아래에서 코인 커서/휠 핸들러가 살아있는 잔상 방지 — finance와 동일 취급).
+        local financeOpen = isvalid(_LobbyManager)
+            and (_LobbyManager.ActiveScreen == "finance" or _LobbyManager.ActiveScreen == "seasonpass")
         local active = onMap and (_GameManager.CurrentItemId ~= "") and (not financeOpen)
         if active ~= self.isActive then
             self.isActive = active

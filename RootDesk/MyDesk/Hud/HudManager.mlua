@@ -26,6 +26,10 @@ script HudManager extends Logic
     property Entity loanPopup = "682736f8-1354-45f4-af4b-07f011f9a94d"        -- '대출하러 가기!' 슬라이드 팝업(버튼+CanvasGroup)
     property Entity dim = "f783a592-c225-4516-986c-ecc3ff1e32b4"                              -- 전면 딤(모달 배경). CTA 활성 시만 Enable. UUID는 UIBuilder write({bind}) 주입.
 
+    -- 시즌 패스: 상단 중앙 선물상자 아이콘(클릭 → _SeasonPassManager:Open). UUID는 UIBuilder write({bind}) 주입.
+    property ButtonComponent btnGift = "fadb86ab-946d-4fef-ba2a-3c21b44f810f"
+    property any giftHandler = nil
+
     -- 내부 상태.
     property integer maxCubes = 5
     property number warnTime = 0
@@ -107,6 +111,11 @@ script HudManager extends Logic
         end
         if isvalid(self.debtBox) then self.debtBox.Enable = false end
 
+        -- 시즌 패스 선물상자 버튼 연결(LoanPopup 클릭 배선과 동일 패턴).
+        if isvalid(self.btnGift) then
+            self.giftHandler = self.btnGift.Entity:ConnectEvent(ButtonClickEvent, self.OnGiftClicked)
+        end
+
         -- 딤 초기화: 숨김 + 루트 최하단 형제로 밀어 Hud/RoundTimer 아래에 렌더(HUD는 밝게 유지).
         --   HudGroup 자체는 .ui에서 GroupOrder=4 정적 → 딤이 켜지면 상점/스크래치/로비를 덮는다.
         self.dimActive = false
@@ -147,6 +156,10 @@ script HudManager extends Logic
             self.loanPopup:DisconnectEvent(ButtonClickEvent, self.loanPopupHandler)
         end
         self.loanPopupHandler = nil
+        if self.giftHandler ~= nil and isvalid(self.btnGift) then
+            self.btnGift.Entity:DisconnectEvent(ButtonClickEvent, self.giftHandler)
+        end
+        self.giftHandler = nil
     end
 
     @ExecSpace("ClientOnly")
@@ -481,7 +494,7 @@ script HudManager extends Logic
         --   게임오버 시에는 사슬 연출(weapon/cube) 동안만 강제 표시(forceLoanPopup).
         if _GameManager.IsGameOver then return self.forceLoanPopup end
         local screen = isvalid(_LobbyManager) and _LobbyManager.ActiveScreen or "lobby"
-        if screen == "finance" then return false end
+        if screen == "finance" or screen == "seasonpass" then return false end  -- 모달 위로 CTA/딤 상승 차단
         if _GameManager.CurrentItemId ~= "" then
             -- 큐브를 이미 사용해 결과가 나온 상태면 판매로 회생 가능 → 대출 유도 안 함(위기 상황 아님).
             if _GameManager.HasPotential then return false end
@@ -512,6 +525,17 @@ script HudManager extends Logic
             end
         end
         return any
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnGiftClicked()
+        -- 선물상자 아이콘 클릭 → 시즌 패스 모달 오픈(게임 종료 상태에선 무시).
+        if _GameManager:IsSessionEnded() then return end
+        _SoundService:PlaySound(self.SfxClickDefault, 1)
+        log("[HudManager] gift clicked -> open season pass")
+        if isvalid(_SeasonPassManager) then
+            _SeasonPassManager:Open()
+        end
     end
 
     @ExecSpace("ClientOnly")

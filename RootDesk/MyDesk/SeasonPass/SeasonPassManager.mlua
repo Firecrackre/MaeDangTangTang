@@ -1,0 +1,333 @@
+@Logic
+script SeasonPassManager extends Logic
+    -- 뒷골목 대장장이 — 시즌 패스 모달(클라 전용 표시/입력). (docs/specs/seasonpass.md)
+    -- 진입: HUD 상단 선물상자 아이콘(HudManager:OnGiftClicked) → Open(). 종료: 닫기 버튼 → Close().
+    --   화면 상태 SSOT는 LobbyManager.ActiveScreen("seasonpass") — FinanceManager 모달 패턴 복제.
+    -- 좌측: 보상 카드 5열 + 수평 진척도 바(톱니 노드 0/1000/2000/3000/4000) / 우측: 미션 정보 6행(체크박스).
+    -- 미션 판정·점수는 전부 서버 권위(_GameManager.SeasonScore/SeasonMissionsData 미러 폴링) — 여기선 표시만.
+    --   '받기' 버튼은 표시+피드백 전용(클릭음+펀치, 지급 없음 — §13 보상 지급 미구현, 유저 확정).
+    -- @Logic 이유: _SeasonPassManager로 전역 접근(Hud가 Open 호출) + SeasonPassGroup엔 in-group @Component가
+    --   없어 루트 Enable 게이팅이 안전(FinanceManager/HudManager와 동일 패턴).
+
+    property string TargetMapName = "InGameMap"
+    -- 진입 직전 화면(복귀용). 로비/상점/스크래치 어디서 왔든 그 화면으로 되돌린다.
+    property string prevScreen = "lobby"
+
+    -- UI 참조(UUID는 UIBuilder write({bind})로 주입).
+    property Entity seasonRoot = "2e3118d1-99bc-4a33-aca6-0a605de89f70"                       -- SeasonPassGroup/Root(맵/화면 게이팅 대상)
+    property Entity board = "567b3404-58ba-472f-9fbf-ac46d4c140ca"                            -- 보드(카드/톱니/미션행 캐싱 기준)
+    property ButtonComponent btnClose = "ebca29fa-f1af-4cc2-9ffd-703fb94f5c59"                -- 우상단 닫기
+    property TextGUIRendererComponent scoreText = "7da0d156-7c51-49e1-9d14-d35e2c61d968"      -- 현재 점수 "1,500 / 4,000"
+    property SpriteGUIRendererComponent gaugeFill = "0f7667d3-0d86-4896-a7fc-1fb8d3910dbc"    -- 진척도 바 채움(FillAmount)
+
+    -- 상태 스왑 이미지 RUID(업로드 애셋 — images/Quest/Quest_RUID.txt SSOT).
+    property string gearOnRUID = "15ad480061b94e7db2a14638c80f8a67"   -- 톱니 노드(달성)
+    property string gearOffRUID = "0997265df22f4035aed4f048959ab4c4"  -- 톱니 노드(미달성)
+    property string checkOnRUID = "59ebf0a4b85a4867bceb2fcfc91dc30c"  -- 체크박스(클리어)
+    property string checkOffRUID = "0b28515b0f984b6998e7c9633bcfbdc6" -- 체크박스(미클리어)
+
+    -- 사운드(docs/specs/soundlist.md 관례).
+    property string clickSoundRUID = "b2b0b752bf914fb5abd885470c84c8fc" -- UI_Click_Default: 받기 버튼
+    property string lightSoundRUID = "0868b0f43f1949c1ace06ae4fa33ee55" -- UI_Click_Light: 닫기
+    property number sfxVolume = 1.0
+
+    -- 연출 튜닝(인스펙터 SSOT).
+    property Color lockedTint = Color(0.32, 0.32, 0.38, 1)  -- 미도달 카드/아이콘 어둡게
+    property number claimPunchScale = 1.1                   -- 받기 클릭 시 카드 펀치 배율(은은하게)
+    property number claimPunchTime = 0.25                   -- 펀치 시간(초)
+
+    -- 내부 상태.
+    property string lastRenderKey = ""   -- SeasonScore|SeasonMissionsData 변화 감지
+    property any cards = nil             -- [i] = { root, icon, nameText, btn } (CacheUI)
+    property any gears = nil             -- [i] = 톱니 스프라이트 엔티티
+    property any rows = nil              -- [i] = { check, nameText, descText, rewardText, progressText }
+    property any closeHandler = nil
+    property any claimConns = nil        -- [{ btnEntity, h }] 받기 버튼 클로저 연결(해제용)
+    property integer punchIndex = 0      -- 펀치 중인 카드 인덱스(0=없음)
+    property number punchTimer = 0
+
+    @ExecSpace("ClientOnly")
+    method void OnBeginPlay()
+        -- 루트가 켜진 저작 상태에서 자식 캐싱(GetChildByName은 꺼진 루트에서 누락 위험 — AugmentManager gotcha)
+        -- → 버튼 연결 → 정적 텍스트/아이콘을 config에서 주입(SSOT — .ui 하드코딩 금지) → 루트 끔.
+        self.prevScreen = "lobby"
+        self:CacheUI()
+        self:FillStatic()
+        if isvalid(self.btnClose) then
+            self.closeHandler = self.btnClose.Entity:ConnectEvent(ButtonClickEvent, self.OnCloseClicked)
+        end
+        if isvalid(self.seasonRoot) then self.seasonRoot.Enable = false end
+        log("[SeasonPassManager] ready")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnEndPlay()
+        -- 연결한 이벤트 해제(필수).
+        if self.closeHandler ~= nil and isvalid(self.btnClose) then
+            self.btnClose.Entity:DisconnectEvent(ButtonClickEvent, self.closeHandler)
+        end
+        if self.claimConns ~= nil then
+            for _, conn in ipairs(self.claimConns) do
+                if conn.h ~= nil and isvalid(conn.btnEntity) then
+                    conn.btnEntity:DisconnectEvent(ButtonClickEvent, conn.h)
+                end
+            end
+        end
+        self.claimConns = nil
+    end
+
+    @ExecSpace("ClientOnly")
+    method void CacheUI()
+        -- 반복 요소(카드 5/톱니 5/미션 6행)를 이름 규칙으로 캐싱. 개수는 config 기준(하드코딩 금지).
+        self.cards = {}
+        self.gears = {}
+        self.rows = {}
+        self.claimConns = {}
+        if not isvalid(self.board) then
+            log_warning("[SeasonPassManager] board not bound - cache skipped")
+            return
+        end
+        local sp = _BlacksmithConfig:GetSeasonPass()
+        for i = 1, #sp.rewards do
+            local card = self.board:GetChildByName("Card" .. tostring(i), true)
+            if isvalid(card) then
+                local entry = {
+                    root = card,
+                    icon = card:GetChildByName("Icon", false),
+                    nameText = card:GetChildByName("Name", false),
+                    btn = card:GetChildByName("BtnClaim", false),
+                }
+                self.cards[i] = entry
+                -- 받기 버튼: 인덱스 캡처 클로저 연결(피드백 전용 — 지급 없음).
+                if isvalid(entry.btn) then
+                    local idx = i
+                    local h = entry.btn:ConnectEvent(ButtonClickEvent, function() self:OnClaimClicked(idx) end)
+                    table.insert(self.claimConns, { btnEntity = entry.btn, h = h })
+                end
+            end
+            self.gears[i] = self.board:GetChildByName("Gear" .. tostring(i), true)
+        end
+        for i = 1, #sp.missionOrder do
+            local row = self.board:GetChildByName("Row" .. tostring(i), true)
+            if isvalid(row) then
+                self.rows[i] = {
+                    check = row:GetChildByName("Check", false),
+                    nameText = row:GetChildByName("Name", false),
+                    descText = row:GetChildByName("Desc", false),
+                    rewardText = row:GetChildByName("Reward", false),
+                    progressText = row:GetChildByName("Progress", false),
+                }
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void FillStatic()
+        -- 미션 이름/조건/점수·보상명·노드 점수 라벨·보상 아이콘을 config에서 주입(SSOT 유지, 텍스트 드리프트 방지).
+        local sp = _BlacksmithConfig:GetSeasonPass()
+        for i = 1, #sp.rewards do
+            local r = sp.rewards[i]
+            local c = self.cards[i]
+            if c ~= nil then
+                self:SetText(c.nameText, r.name)
+                if isvalid(c.icon) and r.icon ~= "" and isvalid(c.icon.SpriteGUIRendererComponent) then
+                    c.icon.SpriteGUIRendererComponent.ImageRUID = r.icon
+                end
+            end
+            local lbl = isvalid(self.board) and self.board:GetChildByName("NodeLabel" .. tostring(i), true) or nil
+            self:SetText(lbl, tostring(r.score))
+        end
+        for i = 1, #sp.missionOrder do
+            local def = sp.missions[sp.missionOrder[i]]
+            local row = self.rows[i]
+            if row ~= nil and def ~= nil then
+                self:SetText(row.nameText, def.name)
+                self:SetText(row.descText, def.desc)
+                self:SetText(row.rewardText, "+" .. tostring(def.reward))
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SetText(any textEntity, string value)
+        -- 자식 텍스트 엔티티에 텍스트 설정(신 UIBuilder = TextGUIRendererComponent — AugmentManager 관례).
+        if not isvalid(textEntity) then return end
+        if isvalid(textEntity.TextGUIRendererComponent) then
+            textEntity.TextGUIRendererComponent.Text = value
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void Open()
+        -- 시즌 패스 진입: 이전 화면 저장 → ActiveScreen="seasonpass" 전환(서버 상태도 정합). (FinanceManager 패턴)
+        if _GameManager:IsSessionEnded() then return end
+        if isvalid(_NextWeekManager) and _NextWeekManager:IsBusy() then return end  -- 정산 연출 중 진입 금지
+        local screen = isvalid(_LobbyManager) and _LobbyManager.ActiveScreen or "lobby"
+        if screen ~= "seasonpass" then self.prevScreen = screen end
+        if isvalid(_LobbyManager) then _LobbyManager.ActiveScreen = "seasonpass" end
+        _GameManager:EnterActivity("seasonpass")
+        self.lastRenderKey = ""   -- 표시 직후 첫 프레임 강제 재렌더
+        log("[SeasonPassManager] open (prevScreen=" .. self.prevScreen .. ")")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void Close()
+        -- 종료: 이전 화면으로 복귀 + 서버 로비 복귀.
+        if isvalid(_LobbyManager) then _LobbyManager.ActiveScreen = self.prevScreen end
+        _GameManager:ReturnToLobby()
+        log("[SeasonPassManager] close -> " .. self.prevScreen)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnCloseClicked()
+        -- 닫기 버튼.
+        _SoundService:PlaySound(self.lightSoundRUID, self.sfxVolume)
+        self:Close()
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnUpdate(number delta)
+        -- 화면 게이팅(InGameMap + ActiveScreen=="seasonpass") + 서버 미러 에지 감지 렌더 + 펀치 연출.
+        local lp = _UserService.LocalPlayer
+        local onMap = isvalid(lp) and lp.CurrentMapName == self.TargetMapName
+        local screen = isvalid(_LobbyManager) and _LobbyManager.ActiveScreen or "lobby"
+        local show = onMap and (screen == "seasonpass")
+        if isvalid(self.seasonRoot) then self.seasonRoot.Enable = show end
+        if not show then return end
+
+        local key = tostring(_GameManager.SeasonScore) .. "|" .. _GameManager.SeasonMissionsData
+        if key ~= self.lastRenderKey then
+            self.lastRenderKey = key
+            self:Render()
+        end
+        self:UpdatePunch(delta)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void Render()
+        -- 서버 미러(SeasonScore/SeasonMissionsData) 기준 전체 갱신: 점수·게이지·톱니·카드 명암·미션 행.
+        local sp = _BlacksmithConfig:GetSeasonPass()
+        local score = _GameManager.SeasonScore
+
+        if isvalid(self.scoreText) then
+            self.scoreText.Text = self:Comma(score) .. " / " .. self:Comma(sp.maxScore)
+        end
+        if isvalid(self.gaugeFill) then
+            self.gaugeFill.FillAmount = math.min(score / sp.maxScore, 1)
+        end
+
+        -- 보상 5지점: 도달 시 톱니 골드 스왑 + 카드 원색·받기 활성 / 미도달은 어둡게·클릭 불가. (§11)
+        for i = 1, #sp.rewards do
+            local reached = score >= sp.rewards[i].score
+            local gear = self.gears[i]
+            if isvalid(gear) and isvalid(gear.SpriteGUIRendererComponent) then
+                gear.SpriteGUIRendererComponent.ImageRUID = reached and self.gearOnRUID or self.gearOffRUID
+            end
+            local c = self.cards[i]
+            if c ~= nil then
+                local tint = reached and Color(1, 1, 1, 1) or self.lockedTint
+                if isvalid(c.root) and isvalid(c.root.SpriteGUIRendererComponent) then
+                    c.root.SpriteGUIRendererComponent.Color = tint
+                end
+                if isvalid(c.icon) and isvalid(c.icon.SpriteGUIRendererComponent) then
+                    c.icon.SpriteGUIRendererComponent.Color = tint
+                end
+                if isvalid(c.btn) then
+                    if isvalid(c.btn.ButtonComponent) then c.btn.ButtonComponent.Enable = reached end
+                    if isvalid(c.btn.SpriteGUIRendererComponent) then c.btn.SpriteGUIRendererComponent.Color = tint end
+                end
+            end
+        end
+
+        -- 미션 6행: 체크박스 스왑 + 진행도 텍스트. (§7·§8)
+        local st = self:ParseMissions()
+        for i = 1, #sp.missionOrder do
+            local key = sp.missionOrder[i]
+            local def = sp.missions[key]
+            local row = self.rows[i]
+            local m = st[key]
+            if row ~= nil and def ~= nil then
+                local cleared = m ~= nil and m.cleared or false
+                local prog = m ~= nil and m.progress or 0
+                if isvalid(row.check) and isvalid(row.check.SpriteGUIRendererComponent) then
+                    row.check.SpriteGUIRendererComponent.ImageRUID = cleared and self.checkOnRUID or self.checkOffRUID
+                end
+                self:SetText(row.progressText, self:FormatProgress(prog, def.target))
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method table ParseMissions()
+        -- 미러 SeasonMissionsData("key:progress:cleared,...") 파싱 → { key = {progress, cleared} }.
+        --   GameManager:GetSyncedAugmentStage와 동일 파싱 패턴(서버 직렬화 SSOT 신뢰).
+        local out = {}
+        local data = _GameManager.SeasonMissionsData
+        if data == nil or data == "" then return out end
+        for token in string.gmatch(data, "([^,]+)") do
+            local k = string.match(token, "^([^:]+):")
+            local p = string.match(token, ":([^:]+):")
+            local c = string.match(token, ":([^:]+)$")
+            if k ~= nil then
+                out[k] = { progress = tonumber(p) or 0, cleared = c == "1" }
+            end
+        end
+        return out
+    end
+
+    @ExecSpace("ClientOnly")
+    method string FormatProgress(integer prog, integer target)
+        -- 진행도 문자열: 큰 수(금액형)는 천 단위 콤마, 작은 수(횟수형)는 "n/N".
+        if target >= 1000 then
+            return self:Comma(prog) .. " / " .. self:Comma(target)
+        end
+        return tostring(prog) .. "/" .. tostring(target)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnClaimClicked(integer index)
+        -- '받기' 클릭: 도달 카드만(서버 점수 재확인). 클릭음 + 카드 가벼운 펀치 — 지급 없음(§13 미구현, 유저 확정).
+        local sp = _BlacksmithConfig:GetSeasonPass()
+        local r = sp.rewards[index]
+        if r == nil or _GameManager.SeasonScore < r.score then return end
+        _SoundService:PlaySound(self.clickSoundRUID, self.sfxVolume)
+        self.punchIndex = index
+        self.punchTimer = self.claimPunchTime
+        log("[SeasonPassManager] claim feedback: " .. r.name .. " (display only)")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdatePunch(number delta)
+        -- 받기 클릭 펀치: sin 산(1→피크→1) 스케일. 종료 시 원복. (HudManager SetRecycleIconPunch 패턴)
+        if self.punchIndex <= 0 then return end
+        local c = self.cards[self.punchIndex]
+        if c == nil or not isvalid(c.root) or not isvalid(c.root.UITransformComponent) then
+            self.punchIndex = 0
+            return
+        end
+        self.punchTimer = self.punchTimer - delta
+        local t = 1 - math.max(self.punchTimer, 0) / self.claimPunchTime
+        local s = 1.0
+        if t < 1.0 then
+            s = 1.0 + (self.claimPunchScale - 1.0) * math.sin(t * math.pi)
+        end
+        c.root.UITransformComponent.UIScale = Vector3(s, s, 1)
+        if self.punchTimer <= 0 then
+            c.root.UITransformComponent.UIScale = Vector3(1, 1, 1)
+            self.punchIndex = 0
+        end
+    end
+
+    method string Comma(integer n)
+        -- 천 단위 콤마 문자열(HudManager 관례 복제).
+        local s = tostring(n)
+        local out = ""
+        local cnt = 0
+        for i = #s, 1, -1 do
+            out = string.sub(s, i, i) .. out
+            cnt = cnt + 1
+            if cnt % 3 == 0 and i > 1 then out = "," .. out end
+        end
+        return out
+    end
+end

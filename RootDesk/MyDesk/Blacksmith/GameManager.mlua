@@ -51,6 +51,14 @@ script GameManager extends Logic
     property integer TotalSellCount = 0   -- 판매 성공 누적 횟수
     property integer MaxSellPrice = 0     -- 한 번에 가장 비싸게 판 금액
 
+    -- ── 시즌 패스 (docs/specs/seasonpass.md) ──
+    --   미션은 서버 자동 클리어(CheckSeasonMissions — config statKey 주도), 보상은 표시 전용(§13 지급 미구현).
+    --   SeasonMissionsData: "key:progress:cleared,..." — missionOrder 순 6토큰 고정 CSV(클라 파싱 단순화).
+    --     progress는 target으로 클램프, 클리어 미션은 target 고정(재시작 후 통계 리셋돼도 완료 표기 유지).
+    --   판정용 통계(WeirdCubeUseCount/TotalSellAmount/DestroyCount)는 서버 전용 — 미러엔 이 CSV만 싣는다.
+    property integer SeasonScore = 0        -- 시즌 패스 총점(미션 보상 합)
+    property string SeasonMissionsData = "" -- 미션 진행/클리어 미러 CSV
+
     -- ── 2단계 판매(판매 확정 → 수령하기) (cube_scratch_system §11) ──
     --   판매 버튼 → RequestSellItem: 즉시 지급하지 않고 IsSalePending으로 전환(아이템/잠재 유지).
     --   판매 결과 창의 '수령하기' → RequestCollectSale: 이때 메소 지급 + 아이템 정리.
@@ -78,7 +86,7 @@ script GameManager extends Logic
 
     -- ── 로비 상태(전이 API) ──
     --   현재 어떤 활동에 있는지 서버 권위 상태. UI/맵이 이 값을 읽어 전환. (lobby_hub.md)
-    --   "lobby" / "cube" / "augment" / "finance"
+    --   "lobby" / "cube" / "augment" / "finance" / "seasonpass"
     property string CurrentActivity = "lobby"
 
     -- ═══════════════ 서버 전용 상태 ═══════════════
@@ -168,6 +176,8 @@ script GameManager extends Logic
             CurrentPotentialData = "",
             TotalSellCount = 0,
             MaxSellPrice = 0,
+            SeasonScore = 0,
+            SeasonMissionsData = "",
             IsSalePending = false,
             PendingSalePrice = 0,
             PendingSaleItemId = "",
@@ -179,10 +189,15 @@ script GameManager extends Logic
             CanLoan = false,
             Debt = 0,
             CurrentActivity = "lobby",
+            -- 서버 전용 스칼라(시즌 패스 미션 판정 통계 — 미러/PushState 제외, 진행도는 SeasonMissionsData로만 전달)
+            WeirdCubeUseCount = 0,   -- 이상한 큐브 사용 횟수(재활용 발동 무관 — CubeUseCount와 의미 다름)
+            TotalSellAmount = 0,     -- 누적 판매 금액
+            DestroyCount = 0,        -- 장비 파괴 경험 횟수
             -- 서버 전용 중첩(미러/PushState에 절대 포함 금지 — cross-space 전송 불가)
             ShopSlots = nil,
             CurrentPotential = nil,
             OwnedAugments = {},
+            SeasonMissions = {},     -- 클리어된 시즌 미션 {key = true}
         }
     end
 
@@ -209,6 +224,7 @@ script GameManager extends Logic
         self:RollShop(s)                  -- 시작 시 상점 슬롯 구성 (concept §6-1)
         self:RollAugmentChoices(s)        -- 시작부터 대장 기술 3택 준비(구매형 상시 진입). blacksmith_upgrade.md §4
         self:UpdateCanLoan(s)
+        self:SerializeSeasonMissions(s)   -- 시즌 패스 CSV를 6토큰으로 채워 초기 PushState부터 클라 파싱 성립
         log(self:Tag(s) .. "session start. meso=" .. tostring(s.Meso)
             .. ", nextRepayIn=" .. tostring(s.CubesUntilRepayment))
     end
@@ -241,6 +257,8 @@ script GameManager extends Logic
             CurrentPotentialData = s.CurrentPotentialData,
             TotalSellCount = s.TotalSellCount,
             MaxSellPrice = s.MaxSellPrice,
+            SeasonScore = s.SeasonScore,
+            SeasonMissionsData = s.SeasonMissionsData,
             IsSalePending = s.IsSalePending,
             PendingSalePrice = s.PendingSalePrice,
             PendingSaleItemId = s.PendingSaleItemId,
@@ -281,6 +299,8 @@ script GameManager extends Logic
         self.CurrentPotentialData = state.CurrentPotentialData
         self.TotalSellCount = state.TotalSellCount
         self.MaxSellPrice = state.MaxSellPrice
+        self.SeasonScore = state.SeasonScore
+        self.SeasonMissionsData = state.SeasonMissionsData
         self.IsSalePending = state.IsSalePending
         self.PendingSalePrice = state.PendingSalePrice
         self.PendingSaleItemId = state.PendingSaleItemId
@@ -606,6 +626,42 @@ script GameManager extends Logic
     end
 
     @ExecSpace("ServerOnly")
+    method void SerializeSeasonMissions(table s)
+        -- 시즌 미션 진행/클리어를 "key:progress:cleared,..." 미러 CSV로 직렬화(missionOrder 순 6토큰 고정).
+        --   progress = 세션 통계 s[statKey]를 target으로 클램프. 클리어 미션은 target 고정
+        --   (재시작 보존 시 통계가 리셋돼도 완료 미션이 0/N으로 보이지 않게). (seasonpass.md §9·§12)
+        local sp = _BlacksmithConfig:GetSeasonPass()
+        local parts = {}
+        for _, key in ipairs(sp.missionOrder) do
+            local def = sp.missions[key]
+            local cleared = (s.SeasonMissions ~= nil and s.SeasonMissions[key]) and 1 or 0
+            local prog = s[def.statKey] or 0
+            if cleared == 1 or prog > def.target then prog = def.target end
+            table.insert(parts, key .. ":" .. tostring(prog) .. ":" .. tostring(cleared))
+        end
+        s.SeasonMissionsData = table.concat(parts, ",")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void CheckSeasonMissions(table s)
+        -- 시즌 미션 범용 판정 엔진(config statKey 주도): 미클리어 미션의 통계가 target에 도달하면
+        --   즉시 클리어 + 점수 지급(서버 자동 지급 — 클레임 RPC 없음, 유저 확정). (seasonpass.md §8·§9)
+        -- 클리어 여부와 무관하게 말미에 항상 재직렬화 → 진행도(2/3 등)도 매 훅마다 최신화된다.
+        local sp = _BlacksmithConfig:GetSeasonPass()
+        if s.SeasonMissions == nil then s.SeasonMissions = {} end
+        for _, key in ipairs(sp.missionOrder) do
+            local def = sp.missions[key]
+            if not s.SeasonMissions[key] and (s[def.statKey] or 0) >= def.target then
+                s.SeasonMissions[key] = true
+                s.SeasonScore = s.SeasonScore + def.reward
+                log(self:Tag(s) .. "[SeasonPass] mission clear: " .. key .. " +" .. tostring(def.reward)
+                    .. " -> score=" .. tostring(s.SeasonScore))
+            end
+        end
+        self:SerializeSeasonMissions(s)
+    end
+
+    @ExecSpace("ServerOnly")
     method void RollAugmentChoices(table s)
         -- 3택 무작위 선택지 구성: 아직 최대 단계에 도달하지 않은 증강만 후보(3단계 소진 제외). (blacksmith_upgrade.md §5·§4)
         local d = _BlacksmithConfig:GetData()
@@ -721,8 +777,17 @@ script GameManager extends Logic
         if not self:IsSessionEndedOf(s) then
             log_warning(self:Tag(s) .. "restart rejected: session not ended")
         else
+            -- 시즌 패스는 판(run)을 넘는 메타 진행 — 점수·클리어 미션만 백업 후 새 세션에 복원(유저 확정).
+            --   미클리어 미션의 부분 진행도(큐브 2/3 등)는 새 판 통계 기준으로 리셋된다(HUD 시계와 의미 충돌 방지).
+            --   서버 내 테이블 이동이라 cross-space 전송 금지 규칙과 무관. 재접속은 기존대로 완전 초기화(서버 저장 미구현).
+            local keepScore = s.SeasonScore or 0
+            local keepMissions = s.SeasonMissions or {}
             self:ResetSessionFor(senderUserId)
-            log(self:Tag(self.Sessions[senderUserId]) .. "RESTART -> new session")
+            local ns = self.Sessions[senderUserId]
+            ns.SeasonScore = keepScore
+            ns.SeasonMissions = keepMissions
+            self:SerializeSeasonMissions(ns)
+            log(self:Tag(ns) .. "RESTART -> new session (season kept: score=" .. tostring(keepScore) .. ")")
         end
         self:PushState(senderUserId)
     end
@@ -868,6 +933,11 @@ script GameManager extends Logic
         -- 비용 차감 + 큐브 사용 횟수 1 증가 (flow §7-4·5).
         -- '한 번 더 사용하기' 시 기존 잠재/판매가는 새 결과로 덮어쓴다 (flow §13).
         s.Meso = s.Meso - cost
+        -- 시즌 패스: '이상한 큐브 사용' 미션 통계. 재활용 발동 여부 무관 — 메소를 쓰고 잠재를 굴렸으면 1회.
+        --   (CubeUseCount는 상환 시계용이라 장인의 큐브도 세고 재활용 시 안 오름 — 미션 의미와 달라 분리.)
+        if cubeKey == "weird" then
+            s.WeirdCubeUseCount = (s.WeirdCubeUseCount or 0) + 1
+        end
         if recycled then
             -- 발동: 횟수 미증가 + 상환 경계 판정 스킵(카운트 불변인데 % 판정을 다시 타면 재상환 버그).
             --   RecycleProcCount 증가 에지를 클라(HudManager)가 감지해 시계 되감기 연출을 재생한다.
@@ -922,6 +992,7 @@ script GameManager extends Logic
         if calc.destroyed then
             -- 파괴: 판매가 0, 파괴 상태로 전환. 실제 아이템 제거는 확인(RequestConfirmDestroy) 시. (flow §14)
             s.IsCurrentDestroyed = true
+            s.DestroyCount = (s.DestroyCount or 0) + 1  -- 시즌 패스: 파괴 발생 순간 카운트(확인 전 이탈해도 인정)
             s.CurrentPrice = 0
             s.CurrentPriceFormula = ""
             log(self:Tag(s) .. "cube used -> DESTROYED. item=" .. s.CurrentItemId
@@ -936,6 +1007,7 @@ script GameManager extends Logic
                 .. ", meso=" .. tostring(s.Meso))
             log(self:Tag(s) .. "price formula: " .. s.CurrentPriceFormula)
         end
+        self:CheckSeasonMissions(s)  -- 시즌 패스: cube3/destroy1 판정(행동은 게임오버 판정보다 먼저 발생한 것)
         self:UpdateCanLoan(s)
         self:CheckStuckGameOver(s)
     end
@@ -1009,12 +1081,14 @@ script GameManager extends Logic
         -- 판매 통계 갱신(게임오버 기록용, Phase 1).
         s.TotalSellCount = s.TotalSellCount + 1
         if gain > s.MaxSellPrice then s.MaxSellPrice = gain end
+        s.TotalSellAmount = (s.TotalSellAmount or 0) + gain  -- 시즌 패스: 누적 판매 금액(totalSale 미션)
         -- 수령 대기 상태 해제 후 아이템 정리(순서 무관하나 pending 먼저 내려야 클라 에지 감지가 깔끔).
         s.IsSalePending = false
         s.PendingSalePrice = 0
         s.PendingSaleItemId = ""
         self:ClearItem(s)
         self:UpdateCanLoan(s)
+        self:CheckSeasonMissions(s)  -- 시즌 패스: sell1/bigSale/totalSale 판정(통계 갱신 직후)
         log(self:Tag(s) .. "collected sale '" .. soldId .. "' (+" .. tostring(gain)
             .. "), meso=" .. tostring(s.Meso)
             .. ", totalSells=" .. tostring(s.TotalSellCount) .. ", maxPrice=" .. tostring(s.MaxSellPrice))
@@ -1074,6 +1148,8 @@ script GameManager extends Logic
             s.PendingRepayment = 0
             self:UpdateRepaymentCountdown(s)
             self:UpdateCanLoan(s)
+            -- 시즌 패스: debt1 판정. 승리 early return보다 앞 — 승리하는 5주차 상환에서도 놓치지 않게.
+            self:CheckSeasonMissions(s)
             log(self:Tag(s) .. "debt settled: stage=" .. tostring(s.DebtStage)
                 .. ", -" .. tostring(amount) .. ", meso=" .. tostring(s.Meso)
                 .. ", nextRepayIn=" .. tostring(s.CubesUntilRepayment))
@@ -1228,13 +1304,13 @@ script GameManager extends Logic
 
     @ExecSpace("Server")
     method void EnterActivity(string activity)
-        -- 로비 → 활동 진입 전이. 허용된 활동만("cube"/"augment"/"finance"). UI/맵이 이 상태로 화면 전환. (lobby_hub.md §5)
+        -- 로비 → 활동 진입 전이. 허용된 활동만("cube"/"augment"/"finance"/"seasonpass"). UI/맵이 이 상태로 화면 전환. (lobby_hub.md §5)
         local s = self:GetSession(senderUserId)
         if self:IsSessionEndedOf(s) then
             self:PushState(senderUserId)
             return
         end
-        if activity ~= "cube" and activity ~= "augment" and activity ~= "finance" then
+        if activity ~= "cube" and activity ~= "augment" and activity ~= "finance" and activity ~= "seasonpass" then
             log_warning(self:Tag(s) .. "enter rejected: bad activity '" .. tostring(activity) .. "'")
         else
             s.CurrentActivity = activity

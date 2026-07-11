@@ -221,7 +221,35 @@ script BlacksmithConfig extends Logic
 		            minDeposit = 10000,   -- 최소 저축 금액 (§8)
 		            dailyRate = 5,        -- 상환 1회(하루)당 이자율(%) (§8)
 		        }
-		
+
+		        -- ── 시즌 패스 (docs/specs/seasonpass.md §12·§15·§16) ──────────────────────
+		        --   미션 판정은 서버 범용 엔진(GameManager:CheckSeasonMissions)이 statKey로 세션 통계를 직접 읽는다:
+		        --     s[statKey] >= target 이면 자동 클리어 + reward 점수 지급(§8 자동 지급, 유저 확정).
+		        --   statKey는 GameManager 세션 테이블의 필드명(SSOT) — 이름 변경 시 세션 필드와 함께 바꿔야 한다.
+		        --   rewards = 점수 오름차순 배열(0점 포함 5지점 — 컨셉 아트 5열, 유저 확정). 보상은 표시 전용(§13 지급 미구현).
+		        --     icon = 완성 ImageRUID 문자열(아바타 아이템이면 "thumbnail://" 접두 포함해 저장) — 클라가 그대로 대입.
+		        d.seasonPass = {
+		            maxScore = 4000,   -- 게이지 최대 표시 점수 (§10)
+		            missionOrder = {"cube3", "sell1", "bigSale", "totalSale", "destroy1", "debt1"},
+		            missions = {
+		                cube3     = { key = "cube3",     name = "큐브 맛보기",      desc = "이상한 큐브 3회 사용",              statKey = "WeirdCubeUseCount", target = 3,      reward = 300 },
+		                sell1     = { key = "sell1",     name = "첫 판매 성공",     desc = "무기 1회 판매",                     statKey = "TotalSellCount",    target = 1,      reward = 200 },
+		                bigSale   = { key = "bigSale",   name = "제법 괜찮은 거래", desc = "1회 판매 금액 100,000 메소 달성",   statKey = "MaxSellPrice",      target = 100000, reward = 500 },
+		                totalSale = { key = "totalSale", name = "장사의 감각",      desc = "총 누적 판매 금액 300,000 메소 달성", statKey = "TotalSellAmount", target = 300000, reward = 700 },
+		                destroy1  = { key = "destroy1",  name = "아찔한 실패",      desc = "장비 파괴 1회 경험",                statKey = "DestroyCount",      target = 1,      reward = 300 },
+		                debt1     = { key = "debt1",     name = "빚은 갚아야지",    desc = "빚 상환 1회 성공",                  statKey = "DebtStage",         target = 1,      reward = 400 },
+		            },
+		            rewards = {
+		                -- icon 출처(msw-search): 증표=명예의 훈장(plain sprite) / 앞치마=Chef Overall / 고글=고글 블랙캡 /
+		                --   망치=강철구 망치 / 세트=블루 오버롤(전부 avataritem → thumbnail:// 접두 완성 문자열).
+		                { score = 0,    name = "견습 대장장이 증표",   icon = "3868621aa4004fb98804fc8774f1daa5" },
+		                { score = 1000, name = "작업용 앞치마",        icon = "thumbnail://ca24091d534449388c01c5929cdcffae" },
+		                { score = 2000, name = "장인의 고글",          icon = "thumbnail://f3050f75313d423bb5386f3664a8e375" },
+		                { score = 3000, name = "빛나는 망치",          icon = "thumbnail://afa0b6e01e5c41d29789796905547bcd" },
+		                { score = 4000, name = "뒷골목 대장장이 세트", icon = "thumbnail://237cd883e7134b65b7af11ffd9f14e5d" },
+		            },
+		        }
+
 		        self.Data = d
 	end
 
@@ -416,6 +444,11 @@ script BlacksmithConfig extends Logic
 	method any GetLoanConfig()
 		        -- 메소 대출 상수(payout/repayMultiplier/maxUses).
 		        return self:GetData().loan
+	end
+
+	method any GetSeasonPass()
+		        -- 시즌 패스 설정(maxScore/missionOrder/missions/rewards) 반환. 서버·클라 공용(SSOT).
+		        return self:GetData().seasonPass
 	end
 
 end

@@ -24,7 +24,7 @@
           "enable": true,
           "visible": true,
           "localize": true,
-          "displayOrder": 7,
+          "displayOrder": 8,
           "pathConstraints": "//",
           "revision": 0,
           "origin": {
@@ -97,7 +97,7 @@
             {
               "@type": "MOD.Core.UIGroupComponent",
               "DefaultShow": true,
-              "GroupOrder": 7,
+              "GroupOrder": 8,
               "GroupType": 1,
               "Enable": true
             },
@@ -294,20 +294,20 @@
               },
               "MobileOnly": false,
               "OffsetMax": {
-                "x": 330.0,
-                "y": 220.0
+                "x": 344.5,
+                "y": 366.0
               },
               "OffsetMin": {
-                "x": -330.0,
-                "y": -220.0
+                "x": -344.5,
+                "y": -366.0
               },
               "Pivot": {
                 "x": 0.5,
                 "y": 0.5
               },
               "RectSize": {
-                "x": 660.0,
-                "y": 440.0
+                "x": 689.0,
+                "y": 732.0
               },
               "UIMode": 1,
               "UIScale": {
@@ -391,8 +391,8 @@
                 "y": 0.5
               },
               "RectSize": {
-                "x": 660.0,
-                "y": 440.0
+                "x": 689.0,
+                "y": 732.0
               },
               "UIMode": 1,
               "UIScale": {
@@ -429,7 +429,7 @@
               "EndFrameIndex": 2147483647,
               "IgnoreMapLayerCheck": false,
               "ImageRUID": {
-                "DataId": "4fea64a3307cda641809ad8be0d4890b"
+                "DataId": "8bdb65b7d76a4691b9afe98019ed61bf"
               },
               "LocalPosition": {
                 "x": 0.0,
@@ -447,9 +447,9 @@
               "SortingLayer": "UI",
               "StartFrameIndex": 0,
               "Color": {
-                "r": 0.0784313753,
-                "g": 0.09019608,
-                "b": 0.13333334,
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
                 "a": 0.97
               },
               "DropShadow": false,
@@ -552,7 +552,7 @@
               },
               "Position": {
                 "x": 0.0,
-                "y": 194.0,
+                "y": 340.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -645,7 +645,7 @@
                 "a": 0.72
               },
               "DropShadowDistance": 3.0,
-              "Font": 0,
+              "Font": 1,
               "FontColor": {
                 "r": 0.9607843,
                 "g": 0.843137264,
@@ -726,20 +726,20 @@
               },
               "MobileOnly": false,
               "OffsetMax": {
-                "x": 280.0,
-                "y": 89.0
+                "x": 245.0,
+                "y": 187.5
               },
               "OffsetMin": {
-                "x": -280.0,
-                "y": 35.0
+                "x": -245.0,
+                "y": 132.5
               },
               "Pivot": {
                 "x": 0.5,
                 "y": 0.5
               },
               "RectSize": {
-                "x": 560.0,
-                "y": 54.0
+                "x": 490.0,
+                "y": 55.0
               },
               "UIMode": 1,
               "UIScale": {
@@ -750,11 +750,11 @@
               "UIVersion": 2,
               "anchoredPosition": {
                 "x": 0.0,
-                "y": 62.0
+                "y": 160.0
               },
               "Position": {
                 "x": 0.0,
-                "y": 62.0,
+                "y": 160.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -838,7 +838,7 @@
                 "y": 0.0
               },
               "Position": {
-                "x": -270.0,
+                "x": -235.0,
                 "y": 0.0,
                 "z": 0.0
               },
@@ -932,7 +932,7 @@
                 "a": 0.72
               },
               "DropShadowDistance": 3.0,
-              "Font": 0,
+              "Font": 1,
               "FontColor": {
                 "r": 0.7882353,
                 "g": 0.807843149,
@@ -1040,7 +1040,7 @@
                 "y": 0.0
               },
               "Position": {
-                "x": 270.0,
+                "x": 235.0,
                 "y": 0.0,
                 "z": 0.0
               },
@@ -1134,7 +1134,7 @@
                 "a": 0.72
               },
               "DropShadowDistance": 3.0,
-              "Font": 0,
+              "Font": 1,
               "FontColor": {
                 "r": 0.494117647,
                 "g": 0.8784314,
@@ -1215,20 +1215,20 @@
               },
               "MobileOnly": false,
               "OffsetMax": {
-                "x": 280.0,
-                "y": 27.0
+                "x": 245.0,
+                "y": 57.5
               },
               "OffsetMin": {
-                "x": -280.0,
-                "y": -27.0
+                "x": -245.0,
+                "y": 2.5
               },
               "Pivot": {
                 "x": 0.5,
                 "y": 0.5
               },
               "RectSize": {
-                "x": 560.0,
-                "y": 54.0
+                "x": 490.0,
+                "y": 55.0
               },
               "UIMode": 1,
               "UIScale": {
@@ -1239,11 +1239,11 @@
               "UIVersion": 2,
               "anchoredPosition": {
                 "x": 0.0,
-                "y": 0.0
+                "y": 30.0
               },
               "Position": {
                 "x": 0.0,
-                "y": 0.0,
+                "y": 30.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -1331,7 +1331,7 @@
                 "y": 0.0
               },
               "Position": {
-                "x": -270.0,
+                "x": -235.0,
                 "y": 0.0,
                 "z": 0.0
               },
@@ -1425,7 +1425,7 @@
                 "a": 0.72
               },
               "DropShadowDistance": 3.0,
-              "Font": 0,
+              "Font": 1,
               "FontColor": {
                 "r": 0.7882353,
                 "g": 0.807843149,
@@ -1533,7 +1533,7 @@
                 "y": 0.0
               },
               "Position": {
-                "x": 270.0,
+                "x": 235.0,
                 "y": 0.0,
                 "z": 0.0
               },
@@ -1627,7 +1627,7 @@
                 "a": 0.72
               },
               "DropShadowDistance": 3.0,
-              "Font": 0,
+              "Font": 1,
               "FontColor": {
                 "r": 0.9607843,
                 "g": 0.843137264,
@@ -1708,20 +1708,20 @@
               },
               "MobileOnly": false,
               "OffsetMax": {
-                "x": 280.0,
-                "y": -35.0
+                "x": 245.0,
+                "y": -72.5
               },
               "OffsetMin": {
-                "x": -280.0,
-                "y": -89.0
+                "x": -245.0,
+                "y": -127.5
               },
               "Pivot": {
                 "x": 0.5,
                 "y": 0.5
               },
               "RectSize": {
-                "x": 560.0,
-                "y": 54.0
+                "x": 490.0,
+                "y": 55.0
               },
               "UIMode": 1,
               "UIScale": {
@@ -1732,11 +1732,11 @@
               "UIVersion": 2,
               "anchoredPosition": {
                 "x": 0.0,
-                "y": -62.0
+                "y": -100.0
               },
               "Position": {
                 "x": 0.0,
-                "y": -62.0,
+                "y": -100.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -1824,7 +1824,7 @@
                 "y": 0.0
               },
               "Position": {
-                "x": -270.0,
+                "x": -235.0,
                 "y": 0.0,
                 "z": 0.0
               },
@@ -1918,7 +1918,7 @@
                 "a": 0.72
               },
               "DropShadowDistance": 3.0,
-              "Font": 0,
+              "Font": 1,
               "FontColor": {
                 "r": 1.0,
                 "g": 0.419607848,
@@ -2026,7 +2026,7 @@
                 "y": 0.0
               },
               "Position": {
-                "x": 270.0,
+                "x": 235.0,
                 "y": 0.0,
                 "z": 0.0
               },
@@ -2120,7 +2120,7 @@
                 "a": 0.72
               },
               "DropShadowDistance": 3.0,
-              "Font": 0,
+              "Font": 1,
               "FontColor": {
                 "r": 1.0,
                 "g": 0.3529412,
@@ -2201,12 +2201,12 @@
               },
               "MobileOnly": false,
               "OffsetMax": {
-                "x": 300.0,
-                "y": 68.0
+                "x": 298.2302,
+                "y": 200.3448
               },
               "OffsetMin": {
-                "x": -300.0,
-                "y": 28.0
+                "x": -301.7698,
+                "y": 160.3448
               },
               "Pivot": {
                 "x": 0.5,
@@ -2224,12 +2224,12 @@
               },
               "UIVersion": 2,
               "anchoredPosition": {
-                "x": 0.0,
-                "y": 28.0
+                "x": -1.7698,
+                "y": 160.3448
               },
               "Position": {
-                "x": 0.0,
-                "y": -192.0,
+                "x": -1.7698,
+                "y": -205.6552,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -2322,7 +2322,7 @@
                 "a": 0.72
               },
               "DropShadowDistance": 3.0,
-              "Font": 0,
+              "Font": 1,
               "FontColor": {
                 "r": 0.56078434,
                 "g": 0.5882353,

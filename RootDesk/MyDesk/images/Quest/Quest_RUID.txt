@@ -1,0 +1,10 @@
+기본 바탕 : f31ecaa0867d4a9d9e1fb0028e00f8ee
+미션 정보 : 209ac63c43c04e19aec852f9c22814e1
+미션 정보 내에 체크박스 체크 해제 버전 : 0b28515b0f984b6998e7c9633bcfbdc6
+미션 정보 내에 체크박스 체크된 버전 : 59ebf0a4b85a4867bceb2fcfc91dc30c
+퀘스트 보상 아이콘 & 퀘스트 보상 내역 & 받기 버튼을 포함할 퀘스트 내역 틀 : 15839d282805414c808874350fd51d8b
+퀘스트 내역 틀 속에 있는 보상 받기 버튼 : e508c6ec52e5420f9eda0bdd64ee8c02
+퀘스트의 진척도를 나타내는 progressbar 빈 버전 : 680f7e7f75c2445f9d66c9b6ce3be7cd
+퀘스트의 진척도를 나타내는 progressbar 차 있는 버전 : 65adcf457a2b49688140cf46c464c1fe
+퀘스트 진척 progressbar위에 있는 톱니바퀴 달성 안된 버전 : 0997265df22f4035aed4f048959ab4c4
+퀘스트 진척 progressbar위에 있는 톱니바퀴 달성 된 버전 :  15ad480061b94e7db2a14638c80f8a67
