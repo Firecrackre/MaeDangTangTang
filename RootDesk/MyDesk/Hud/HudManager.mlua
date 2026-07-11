@@ -339,8 +339,8 @@ script HudManager extends Logic
         if _GameManager.CurrentItemId ~= "" then
             -- 큐브를 이미 사용해 결과가 나온 상태면 판매로 회생 가능 → 대출 유도 안 함(위기 상황 아님).
             if _GameManager.HasPotential then return false end
-            local weird = _BlacksmithConfig:GetCube("weird")
-            local cost = (weird ~= nil) and weird.cost or 0
+            -- 이상한 큐브 실효가(증강 '귀한 태생' 단계 연동). OnUpdate 구동이라 증강 구매 즉시 반영.
+            local cost = _GameManager:GetSyncedCubeCost("weird")
             return _GameManager.Meso < cost
         elseif screen == "shop" then
             return self:AllShopUnaffordable()

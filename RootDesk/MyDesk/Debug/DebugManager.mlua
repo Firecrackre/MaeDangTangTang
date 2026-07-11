@@ -1,0 +1,47 @@
+@Logic
+script DebugManager extends Logic
+    -- [DEBUG] 로비(InGameMap) 최상단 '메소 +100만' 버튼. 밸런스 테스트 전용.
+    --   제거 시: 이 스크립트 + ui/DebugGroup.ui + GameManager.RequestDebugAddMeso 3개를 함께 지운다.
+    --   서버 권위: 버튼 → _GameManager:RequestDebugAddMeso()(서버에서 메소 지급). 클라는 표시/입력만.
+
+    property string TargetMapName = "InGameMap"   -- 이 맵에서만 버튼 표시(로비)
+    property Entity debugRoot = "79073286-5914-4cf7-babb-8044d562f7d3"                 -- 게이팅 루트(DebugGroup 그룹 엔티티)
+    property Entity debugButton = "37053e2a-b266-4986-8762-4ee39a56c14c"               -- '메소 +100만' 버튼 엔티티
+    property any clickHandler = nil
+
+    method void OnBeginPlay()
+        -- 버튼 클릭 배선 + 맵 게이팅 초기화(.ui는 전역 자원이라 명시적 초기화 필요).
+        if isvalid(self.debugButton) then
+            self.clickHandler = self.debugButton:ConnectEvent(ButtonClickEvent, self.OnClick)
+        end
+        self:UpdateGate()
+        log("[DebugManager] ready")
+    end
+
+    method void OnUpdate(number delta)
+        -- InGameMap(로비)에서만 표시(변화감지만 하면 초기 상태를 못 잡으므로 매 프레임 게이팅).
+        self:UpdateGate()
+    end
+
+    method void UpdateGate()
+        -- 현재 맵이 대상일 때만 루트 Enable.
+        if not isvalid(self.debugRoot) then return end
+        local lp = _UserService.LocalPlayer
+        local onMap = isvalid(lp) and lp.CurrentMapName == self.TargetMapName
+        if self.debugRoot.Enable ~= onMap then
+            self.debugRoot.Enable = onMap
+        end
+    end
+
+    method void OnClick(ButtonClickEvent event)
+        -- 서버 권위 디버그 지급 요청(메소 +1,000,000).
+        _GameManager:RequestDebugAddMeso()
+    end
+
+    method void OnEndPlay()
+        -- 이벤트 해제(필수).
+        if self.clickHandler ~= nil and isvalid(self.debugButton) then
+            self.debugButton:DisconnectEvent(ButtonClickEvent, self.clickHandler)
+        end
+    end
+end

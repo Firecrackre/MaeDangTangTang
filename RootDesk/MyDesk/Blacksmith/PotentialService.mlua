@@ -9,13 +9,15 @@ script PotentialService extends Logic
         log("[PotentialService] ready")
     end
 
-    method string RollGrade()
-        -- 등급 결정 — 누적 확률 (potential §4: 60/28/10/2).
+    method string RollGrade(integer gradeStage)
+        -- 등급 결정 — 누적 확률 (potential §4). 증강 '귀한 태생'(innateGrade) 단계별 확률표를 사용한다.
+        --   gradeStage: 0=미보유(gradeProb 기본표), 1~3=cubeGradeProb 절대 확률표. 각 표 합=100.
         local d = _BlacksmithConfig:GetData()
+        local prob = _BlacksmithConfig:GetCubeGradeProbTable(gradeStage or 0)
         local r = _UtilLogic:RandomIntegerRange(1, 100)
         local acc = 0
         for _, g in ipairs(d.gradeOrder) do
-            acc += d.gradeProb[g]
+            acc += (prob[g] or 0)
             if r <= acc then return g end
         end
         return d.gradeOrder[1]
@@ -118,9 +120,10 @@ script PotentialService extends Logic
         return d.mainPool[_UtilLogic:RandomIntegerRange(1, #d.mainPool)]
     end
 
-    method any RollWith(boolean allowDestroy, string equipId, number validForceChance)
+    method any RollWith(boolean allowDestroy, string equipId, number validForceChance, integer gradeStage)
         -- 잠재능력 1회 판정 전체. 결과 데이터 반환 (potential §11).
-        local grade = self:RollGrade()
+        -- gradeStage: 증강 '귀한 태생' 단계(0=미보유) — 등급 확률표 선택에 사용.
+        local grade = self:RollGrade(gradeStage)
         local opts = {}
         for i = 1, 3 do
             opts[i] = self:RollLine(allowDestroy, equipId, validForceChance)
@@ -147,10 +150,11 @@ script PotentialService extends Logic
     end
 
     @ExecSpace("ServerOnly")
-    method any RollPotential(boolean allowDestroy, string equipId, number validForceChance)
+    method any RollPotential(boolean allowDestroy, string equipId, number validForceChance, integer gradeStage)
         -- 큐브 1회 판정. allowDestroy=true면 파괴 가능(이상한 큐브), false면 파괴 없음(장인의 큐브). (potential §12)
         -- equipId/validForceChance: 증강 '대장장이의 눈' 컨텍스트(없으면 기본 균등 추첨). (Phase 8)
-        return self:RollWith(allowDestroy, equipId, validForceChance)
+        -- gradeStage: 증강 '귀한 태생' 단계(0=미보유) — 등급 확률표 선택.
+        return self:RollWith(allowDestroy, equipId, validForceChance, gradeStage)
     end
 
     method string FormatOption(any o)

@@ -143,6 +143,9 @@ script ScratchTicketManager extends Component
     -- 5/5(상환 미납) 도달 시 큐브 재사용·구매 잠금 상태 추적(레벨 구동 변화 감지)
     property boolean lastRepayDue = false
 
+    -- 증강 '귀한 태생' 단계 추적(레벨 구동) — 변화 시 큐브 가격 라벨 재세팅. -1 = 미초기화.
+    property integer lastCubeCostStage = -1
+
     property any clickRecords = nil      -- {entity, eventHandler} list for cube/buy/reuse/sell buttons
     property any enterRecords = nil      -- hover enter/exit handler records
 
@@ -260,20 +263,30 @@ script ScratchTicketManager extends Component
     @ExecSpace("ClientOnly")
     method void InitCubeButtons()
         -- 큐브 아이콘 이미지(plain RUID) + 구매 버튼 가격 라벨을 config에서 채운다.
+        --   가격은 증강 '귀한 태생' 단계 연동 실효가(GetSyncedCubeCost) — 단계 변화 시 RefreshCubeCost가 재세팅한다.
         local weird = _BlacksmithConfig:GetCube("weird")
         local master = _BlacksmithConfig:GetCube("master")
         if weird ~= nil then
             self:SetIcon(self.cubeIconWeird, weird.icon, Color(1, 1, 1, 1))  -- 실제 큐브 아트 본색
             if isvalid(self.weirdBuyText) then
-                self.weirdBuyText.Text = weird.label .. "\n" .. self:Comma(weird.cost) .. " 메소"
+                self.weirdBuyText.Text = weird.label .. "\n" .. self:Comma(_GameManager:GetSyncedCubeCost("weird")) .. " 메소"
             end
         end
         if master ~= nil then
             self:SetIcon(self.cubeIconMaster, master.icon, Color(1, 1, 1, 1))  -- 실제 큐브 아트 본색
             if isvalid(self.masterBuyText) then
-                self.masterBuyText.Text = master.label .. "\n" .. self:Comma(master.cost) .. " 메소"
+                self.masterBuyText.Text = master.label .. "\n" .. self:Comma(_GameManager:GetSyncedCubeCost("master")) .. " 메소"
             end
         end
+        self.lastCubeCostStage = _GameManager:GetSyncedAugmentStage("innateGrade")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void RefreshCubeCost()
+        -- 증강 '귀한 태생' 단계 변화 시 큐브 가격 라벨을 재세팅한다(레벨 구동, InitCubeButtons 재사용).
+        local stage = _GameManager:GetSyncedAugmentStage("innateGrade")
+        if stage == self.lastCubeCostStage then return end
+        self:InitCubeButtons()
     end
 
     @ExecSpace("ClientOnly")
@@ -404,6 +417,9 @@ script ScratchTicketManager extends Component
             self.lastRepayDue = _GameManager.IsRepaymentDue
             self:RefreshCubeLock()
         end
+
+        -- 증강 '귀한 태생' 단계 변화 감지 → 큐브 가격 라벨 갱신(구매로 큐브가가 오르면 즉시 반영).
+        self:RefreshCubeCost()
 
         -- 잠재 데이터 변화 감지 → 대기/스크래치 세팅 전환.
         local pdata = _GameManager.CurrentPotentialData

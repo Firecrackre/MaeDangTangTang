@@ -347,6 +347,12 @@ script GameManager extends Logic
         return math.floor(reduced / 1000 + 0.5) * 1000
     end
 
+    method integer GetSyncedCubeCost(string cubeKey)
+        -- 큐브 1개 실효 구매가(클라 미러 판독). 증강 '귀한 태생'(innateGrade) 단계에 연동.
+        --   미러 AugmentsData 기반이라 서버 차감액(GetCubeCostOf)과 클라 표시값이 항상 일치한다.
+        return _BlacksmithConfig:GetCubeCost(cubeKey, self:GetSyncedAugmentStage("innateGrade"))
+    end
+
     -- ═══════════════ 서버 세션 판독 헬퍼 (...Of — 세션 테이블 기준) ═══════════════
 
     @ExecSpace("ServerOnly")
@@ -381,6 +387,12 @@ script GameManager extends Logic
         local stage = self:GetAugmentStageOf(s, key)
         if stage <= 0 then return 0 end
         return _BlacksmithConfig:GetAugmentStageValue(key, stage)
+    end
+
+    @ExecSpace("ServerOnly")
+    method integer GetCubeCostOf(table s, string cubeKey)
+        -- 큐브 1개 실효 구매가(서버 세션 기준). 증강 '귀한 태생'(innateGrade) 단계에 연동. GetSyncedCubeCost와 동일 공식.
+        return _BlacksmithConfig:GetCubeCost(cubeKey, self:GetAugmentStageOf(s, "innateGrade"))
     end
 
     @ExecSpace("ServerOnly")
@@ -533,8 +545,7 @@ script GameManager extends Logic
         elseif not s.IsCurrentDestroyed then
             -- 아이템 보유: 큐브도 못 사고, 지금 팔아도 상점 최저가에 못 미치면 완전 스턱.
             --   (판매로 살아날 수 있으면 게임오버 아님 — 판 뒤 미보유 판정("weapon")이 이어서 잡는다.)
-            local weird = _BlacksmithConfig:GetCube("weird")
-            local cubeCost = (weird ~= nil) and weird.cost or 0
+            local cubeCost = self:GetCubeCostOf(s, "weird")
             if s.Meso < cubeCost then
                 -- 큐브 미사용(잠재 없음)이면 판매 불가 → 판매로 회생 불가(회생가 0). (기본가 판매 폐지)
                 local sellGain = s.HasPotential and s.CurrentPrice or 0
@@ -631,8 +642,7 @@ script GameManager extends Logic
         end
         local stuck
         if s.CurrentItemId ~= "" then
-            local weird = _BlacksmithConfig:GetCube("weird")
-            local cubeCost = (weird ~= nil) and weird.cost or 0
+            local cubeCost = self:GetCubeCostOf(s, "weird")
             stuck = s.Meso < cubeCost
         else
             local minBuy = -1
@@ -830,18 +840,22 @@ script GameManager extends Logic
         local d = _BlacksmithConfig:GetData()
         -- 큐브 종류 해석(클라 입력 불신 → 서버가 config에서 비용/파괴여부 확정). 알 수 없으면 weird 폴백.
         local cube = _BlacksmithConfig:GetCube(cubeType)
+        local cubeKey = cubeType
         if cube == nil then
+            cubeKey = "weird"
             cube = _BlacksmithConfig:GetCube("weird")
         end
-        if s.Meso < cube.cost then
+        -- 큐브 비용 = 증강 '귀한 태생' 단계 연동(GetCubeCostOf가 SSOT — 정적 cost 필드 폐기).
+        local cost = self:GetCubeCostOf(s, cubeKey)
+        if s.Meso < cost then
             log_warning(self:Tag(s) .. "cube rejected: not enough meso (" .. tostring(s.Meso)
-                .. " < " .. tostring(cube.cost) .. ")")
+                .. " < " .. tostring(cost) .. ")")
             return
         end
 
         -- 비용 차감 + 큐브 사용 횟수 1 증가 (flow §7-4·5).
         -- '한 번 더 사용하기' 시 기존 잠재/판매가는 새 결과로 덮어쓴다 (flow §13).
-        s.Meso = s.Meso - cube.cost
+        s.Meso = s.Meso - cost
         s.CubeUseCount = s.CubeUseCount + 1
 
         -- 상환 주기(기본 5회) 경계 도달 시 상환 예정 상태로 전환 (concept §6-3, flow §15).
@@ -861,7 +875,9 @@ script GameManager extends Logic
         -- 파괴 허용 여부는 큐브 종류로 결정(장인의 큐브는 파괴 없음).
         -- 증강 '대장장이의 눈': 현재 무기 유효 옵션 강제 확률(%)을 판정 컨텍스트로 넘긴다. (Phase 8)
         local validForce = self:GetAugmentStageValueOf(s, "smithEye")
-        local pr = _PotentialService:RollPotential(cube.allowDestroy, s.CurrentItemId, validForce)
+        -- 증강 '귀한 태생': 보유 단계(0=미보유)를 넘겨 상위 잠재 등급 확률표를 사용하게 한다.
+        local gradeStage = self:GetAugmentStageOf(s, "innateGrade")
+        local pr = _PotentialService:RollPotential(cube.allowDestroy, s.CurrentItemId, validForce, gradeStage)
         pr.baseOverride = s.CurrentBasePrice
         local calc = _PricingCalculator:Calculate(s.CurrentItemId, pr)
         -- 증강 '위험 거래': 판매가 % 증가(파괴가 아닐 때만). (Phase 8)
@@ -1169,6 +1185,22 @@ script GameManager extends Logic
         self:UpdateCanLoan(s)
         log(self:Tag(s) .. "LOAN granted: +" .. tostring(amount) .. ", uses=" .. tostring(s.LoanUseCount)
             .. ", meso=" .. tostring(s.Meso) .. ", debt=" .. tostring(s.Debt))
+    end
+
+    @ExecSpace("Server")
+    method void RequestDebugAddMeso()
+        -- [DEBUG] 로비 디버그 버튼용 — 메소 1,000,000 즉시 지급(서버 권위). 밸런스 테스트 전용.
+        local s = self:GetSession(senderUserId)
+        self:DoDebugAddMeso(s)
+        self:PushState(senderUserId)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void DoDebugAddMeso(table s)
+        -- [DEBUG] 메소 +1,000,000. 대출/구매 게이팅에 영향 → 조건 재평가.
+        s.Meso = s.Meso + 1000000
+        self:UpdateCanLoan(s)
+        log(self:Tag(s) .. "DEBUG +1,000,000 meso -> " .. tostring(s.Meso))
     end
 
     -- ═══════════════ 로비 상태 전이 API (Phase 5) ═══════════════
