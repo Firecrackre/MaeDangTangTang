@@ -22,9 +22,9 @@ script BlacksmithConfig extends Logic
 		        local d = {}
 		
 		        -- 시작/재화 기본값 (flow §5, concept §6-2)
-		        d.startMeso = 70000
+		        d.startMeso = 90000
 		        d.cubeCost = 7000              -- 이상한 큐브 사용 비용(폴백 — GetCubeCost(cubeKey, gradeStage)가 SSOT)
-		        d.bonusChance = 15             -- 이탈 확률(%) — 주요 옵션 1줄당 (potential §8)
+		        d.bonusChance = 16             -- 이탈 확률(%) — 주요 옵션 1줄당 (potential §8)
 		
 		        -- 큐브 종류 (concept §6-2, potential §12). 메커톤: 이상한 큐브 + 장인의 큐브 2종.
 		        --   cost: 1회 사용 비용. allowDestroy: 파괴 항목 등장 가능 여부(장인의 큐브는 false → 파괴 없음).
@@ -36,27 +36,27 @@ script BlacksmithConfig extends Logic
 		        --     증강이 등급 확률을 올리는 대신 큐브 비용을 키우는 고위험 트레이드오프(유저 지정). GetCubeCost가 SSOT.
 		        --     (cost 필드는 폐기 — 모든 호출부는 GetCubeCost(cubeKey, gradeStage) 사용.)
 		        d.cubes = {
-		            weird  = { key = "weird",  label = "이상한 큐브", costs = {7000, 8000, 9000, 10000},    allowDestroy = true,  icon = "31e4268ff65b4281abd509162ca199e3" },
-		            master = { key = "master", label = "장인의 큐브", costs = {45000, 48000, 55000, 80000}, allowDestroy = false, icon = "1edec01f822c422293f62729e7462a22" },
+		            weird  = { key = "weird",  label = "이상한 큐브", costs = {7000, 9000, 12000, 16000},    allowDestroy = true,  icon = "31e4268ff65b4281abd509162ca199e3" },
+		            master = { key = "master", label = "장인의 큐브", costs = {45000, 50000, 74000, 95000}, allowDestroy = false, icon = "1edec01f822c422293f62729e7462a22" },
 		        }
 		
 		        -- 등급 (potential §4). 잠재능력 등급 = 5단계(커먼~레전더리). ⚠ 무기 등급(weaponGrades)과는 별개 축.
 		        --   gradeProb = 0단계(증강 '귀한 태생' 미보유) 기본 등장 확률표. 상위 단계는 cubeGradeProb로 교체.
 		        d.gradeOrder = {"Common", "Rare", "Epic", "Unique", "Legendary"}
 		        d.gradeProb = { Common = 60, Rare = 30, Epic = 10, Unique = 0, Legendary = 0 }        -- 0단계 기본표(합 100)
-		        d.gradeMult = { Common = 1.0, Rare = 1.3, Epic = 1.7, Unique = 2.8, Legendary = 4.2 }  -- 판매가 등급 배수(유저 지정)
+		        d.gradeMult = { Common = 1.0, Rare = 1.3, Epic = 1.6, Unique = 2.3, Legendary = 3.2 }  -- 판매가 등급 배수(유저 지정)
 		
 		        -- 증강 '귀한 태생'(innateGrade) 단계별 잠재 등급 절대 확률표 (blacksmith_upgrade.md §6, betterGoodsGradeProb 패턴).
 		        --   0단계(미보유) = 위 gradeProb. 1~3단계 = 아래 표로 통째 교체. 각 표의 합은 100.
 		        --   PotentialService:RollGrade가 보유 단계를 GetCubeGradeProbTable로 조회해 추첨한다.
 		        d.cubeGradeProb = {
 		            [1] = { Common = 40, Rare = 40, Epic = 15, Unique = 5,  Legendary = 0 },
-		            [2] = { Common = 25, Rare = 40, Epic = 20, Unique = 10, Legendary = 5 },
-		            [3] = { Common = 20, Rare = 25, Epic = 30, Unique = 15, Legendary = 10 },
+		            [2] = { Common = 24, Rare = 38, Epic = 23, Unique = 12, Legendary = 3 },
+		            [3] = { Common = 20, Rare = 25, Epic = 31, Unique = 19, Legendary = 5 },
 		        }
-
+		
 		        -- 옵션 타입 확률 — 각 줄 개별 판정 (potential §5). 합 100.
-		        d.optionTypeProb = { Main = 62, Junk = 34, Destroy = 4 }
+		        d.optionTypeProb = { Main = 70, Junk = 28, Destroy = 2 }
 		
 		        -- 주요 옵션 풀: 주스탯4 + 공격계열3 = 7종 균등 추첨 (potential §6)
 		        d.mainPool = {"STR", "DEX", "INT", "LUK", "ATK", "MATK", "BATK"}
@@ -89,7 +89,7 @@ script BlacksmithConfig extends Logic
 		        }
 		
 		        -- 이탈 배수 — 유효 이탈 개수 기준 (pricing §12). 키 = 개수(0~3)
-		        d.bonusMult = { [0] = 1.0, [1] = 1.2, [2] = 1.65, [3] = 2.3 }
+		        d.bonusMult = { [0] = 1.0, [1] = 1.15, [2] = 1.4, [3] = 1.85 }
 		
 		        -- 조합 보너스 — 우선순위 높은 순서대로. 적용은 PricingCalculator에서 최고 1개만. (pricing §10)
 		        d.comboBonus = {
@@ -108,15 +108,15 @@ script BlacksmithConfig extends Logic
 		        -- icon: 아바타 무기 아이템 RUID(상점 아이콘). 렌더 시 "thumbnail://" 접두사를 붙인다(avataritem 규칙).
 		        d.equipment = {
 		            sword  = { id = "sword",  label = "검",     stat = "STR", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000, icon = "2f92c17d771e4b1d887b3e58ecfab6bf",
-                gradeIcons = { Common = "74ee6047ee0142b281f17c905219eb4b", Rare = "cb774c76c3a54b3f8983eee569100fb8", Epic = "663ced1bf5544d2096cc33d5976e77c4", Unique = "acb65b187f21498d9ad1905359f2f759", Legendary = "23f591e794a8487298d8e5ee9a3a7727" } },  -- ⭐토트훈련용검/영웅글라디우스/프라우테/우트가르드세이버/앱솔랩스세이버
+		                gradeIcons = { Common = "74ee6047ee0142b281f17c905219eb4b", Rare = "cb774c76c3a54b3f8983eee569100fb8", Epic = "663ced1bf5544d2096cc33d5976e77c4", Unique = "acb65b187f21498d9ad1905359f2f759", Legendary = "23f591e794a8487298d8e5ee9a3a7727" } },  -- ⭐토트훈련용검/영웅글라디우스/프라우테/우트가르드세이버/앱솔랩스세이버
 		            bow    = { id = "bow",    label = "활",     stat = "DEX", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000, icon = "0b85f005a25241189d274e61c5df0cdd",
-                gradeIcons = { Common = "67ce4147813d49f5975917ee86777950", Rare = "d1df8ca59a99400c97a98668c183b283", Epic = "ed83963681d448f08ecad5d78292d08e", Unique = "e9bf79c342e140ebaba882422cbe56fa", Legendary = "18d80518f407457aa489da97c5fead0d" } },  -- 사냥꾼의활/레드바이퍼/드래곤샤인보우/팍스반레온보우/파프니르윈드체이서
+		                gradeIcons = { Common = "67ce4147813d49f5975917ee86777950", Rare = "d1df8ca59a99400c97a98668c183b283", Epic = "ed83963681d448f08ecad5d78292d08e", Unique = "e9bf79c342e140ebaba882422cbe56fa", Legendary = "18d80518f407457aa489da97c5fead0d" } },  -- 사냥꾼의활/레드바이퍼/드래곤샤인보우/팍스반레온보우/파프니르윈드체이서
 		            staff  = { id = "staff",  label = "스태프", stat = "INT", atk = {"MATK", "BATK"}, basePrice = 100000, buyCost = 40000, icon = "989be911209545fdacf84f92874cb338",
-                gradeIcons = { Common = "7380b5e5754a4e338e65fa232a8a095b", Rare = "2425d40177814d208b56b2a8dac4be1c", Epic = "f7349a239ce946419f936edd91ea8eec", Unique = "91da8c2fa81945a68ae9c13f9f8553dc", Legendary = "eb8d8b0ad5ae482facb6f6b6bfb7ef89" } },  -- ⭐나무스태프/메이플스태프/⭐10주년블랙스태프/네크로로드/마이스터배틀스태프
+		                gradeIcons = { Common = "7380b5e5754a4e338e65fa232a8a095b", Rare = "2425d40177814d208b56b2a8dac4be1c", Epic = "f7349a239ce946419f936edd91ea8eec", Unique = "91da8c2fa81945a68ae9c13f9f8553dc", Legendary = "eb8d8b0ad5ae482facb6f6b6bfb7ef89" } },  -- ⭐나무스태프/메이플스태프/⭐10주년블랙스태프/네크로로드/마이스터배틀스태프
 		            wand   = { id = "wand",   label = "완드",   stat = "INT", atk = {"MATK", "BATK"}, basePrice = 50000,  buyCost = 18000, icon = "133e697ac731441a912f1e58ec2a9182",
-                gradeIcons = { Common = "8b30dd5dc3e24064ad96799b4587ae5a", Rare = "a5dc4044efcd429cb053cf30b11f4d4b", Epic = "d8bc9682c6a849ab941993a36c0e7e5c", Unique = "78827f2a06c3403a9e0d78e8da58d402", Legendary = "0de959f44ddb4a7c8ab39c9db557d37b" } },  -- 하드우드완드/이블테일러/드래곤완드/우트가르드완드/아케인셰이드완드
+		                gradeIcons = { Common = "8b30dd5dc3e24064ad96799b4587ae5a", Rare = "a5dc4044efcd429cb053cf30b11f4d4b", Epic = "d8bc9682c6a849ab941993a36c0e7e5c", Unique = "78827f2a06c3403a9e0d78e8da58d402", Legendary = "0de959f44ddb4a7c8ab39c9db557d37b" } },  -- 하드우드완드/이블테일러/드래곤완드/우트가르드완드/아케인셰이드완드
 		            dagger = { id = "dagger", label = "단도",   stat = "LUK", atk = {"ATK", "BATK"},  basePrice = 50000,  buyCost = 18000, icon = "11ccce1ca9224050897b2d59fe14a3bf",
-                gradeIcons = { Common = "623edb37903f49b5acb1517bb550d1fb", Rare = "77a92b6db90b458aa7bd60f203e061ca", Epic = "1965573dd25047c9a6ec6f6f42a298dd", Unique = "df8f87efb85e4df8afd56bda71b29a44", Legendary = "dac4563ba6ca4aa4a5cae9a93a6fcd66" } },  -- 필드대거/베즐러드/블러드대거/⭐녹스반레온대거/⭐앱솔랩스슬래셔
+		                gradeIcons = { Common = "623edb37903f49b5acb1517bb550d1fb", Rare = "77a92b6db90b458aa7bd60f203e061ca", Epic = "1965573dd25047c9a6ec6f6f42a298dd", Unique = "df8f87efb85e4df8afd56bda71b29a44", Legendary = "dac4563ba6ca4aa4a5cae9a93a6fcd66" } },  -- 필드대거/베즐러드/블러드대거/⭐녹스반레온대거/⭐앱솔랩스슬래셔
 		        }
 		        d.equipmentOrder = {"bow", "wand", "sword", "dagger", "staff"}
 		
@@ -135,11 +135,11 @@ script BlacksmithConfig extends Logic
 		        -- prob = 0단계(더좋은물품 미보유) 기본 등장 확률(%) — 무기 상점 기획서 §9 기준안(60/30/9/1/0, 합 100).
 		        --   0단계에서는 레전더리 0%·유니크 1% — 상위 등급은 증강 '더 좋은 물품'(betterGoodsGradeProb)으로만 열린다.
 		        d.weaponGrades = {
-		    		Common    = { key = "Common",    label = "커먼",     basePrice = 25000,  buyCost = 30000,  prob = 60, color = {0.62, 0.64, 0.68}, image = "93b4517e8ad7439a9bc0756257e1454f" },
-		            Rare      = { key = "Rare",      label = "레어",     basePrice = 50000,  buyCost = 60000,  prob = 30, color = {0.30, 0.58, 0.92}, image = "5882531c2b5841cbb68127cdb28cfe36" },
-		            Epic      = { key = "Epic",      label = "에픽",     basePrice = 100000, buyCost = 120000, prob = 9,  color = {0.70, 0.40, 0.92}, image = "7afb7a9b2fb647e991dbbd51c370a8d3" },
-		            Unique    = { key = "Unique",    label = "유니크",   basePrice = 200000, buyCost = 240000, prob = 1,  color = {0.96, 0.80, 0.22}, image = "84bfdd28bcf1441cbff9dc8879c9cede" },
-		            Legendary = { key = "Legendary", label = "레전더리", basePrice = 400000, buyCost = 480000, prob = 0,  color = {0.40, 0.85, 0.45}, image = "f914e97740fd473ea2f3ace6dd247e10" },
+		    		Common    = { key = "Common",    label = "커먼",     basePrice = 25000,  buyCost = 30000,  prob = 60, color = {0.62, 0.64, 0.68} },
+		            Rare      = { key = "Rare",      label = "레어",     basePrice = 45000,  buyCost = 54000,  prob = 30, color = {0.30, 0.58, 0.92} },
+		            Epic      = { key = "Epic",      label = "에픽",     basePrice = 75000, buyCost = 90000, prob = 9,  color = {0.70, 0.40, 0.92} },
+		            Unique    = { key = "Unique",    label = "유니크",   basePrice = 120000, buyCost = 150000, prob = 1,  color = {0.96, 0.80, 0.22} },
+		            Legendary = { key = "Legendary", label = "레전더리", basePrice = 210000, buyCost = 260000, prob = 0,  color = {0.40, 0.85, 0.45} },
 				}
 		
 		        -- 증강 '더 좋은 물품 들여오기' 단계별 상점 등급 절대 확률표 (blacksmith_upgrade.md §6).
@@ -147,13 +147,13 @@ script BlacksmithConfig extends Logic
 		        --   1단계는 레전더리 0% — RollWeaponGrade가 0 가중치를 허용하므로 그대로 동작한다.
 		        d.betterGoodsGradeProb = {
 		            [1] = { Common = 45, Rare = 40, Epic = 12, Unique = 3,  Legendary = 0 },
-		            [2] = { Common = 30, Rare = 42, Epic = 20, Unique = 7,  Legendary = 1 },
+		            [2] = { Common = 30, Rare = 42, Epic = 19, Unique = 7,  Legendary = 2 },
 		            [3] = { Common = 18, Rare = 38, Epic = 27, Unique = 13, Legendary = 4 },
 		        }
 		
 		        -- 빚 상환 (concept §6-3, flow §15, finance_management.md 상환액 스케줄)
 		        d.debtCycle = 5                                -- N회 큐브 사용마다 상환
-		        d.debtTable = {45000, 75000, 110000, 150000}   -- 1~4주 금액
+		        d.debtTable = {50000, 100000, 200000, 450000}   -- 1~4주 금액
 		        d.debtGrowth = 1.1                             -- 테이블 범위 밖(5주~)은 매주 ×1.1
 		        d.winStage = 5                                 -- 상환 N회 성공 시 승리
 		
@@ -168,7 +168,7 @@ script BlacksmithConfig extends Logic
 		        -- 증강 구매 비용 = 증강이 '도달할 단계' 기준(단계 높을수록 비쌈). (blacksmith_upgrade.md §3)
 		        --   구매 방식(유저 확정): 로비 '대장 기술' → 3택 창 → 각 증강 하단의 구매 골드로 즉시 지불.
 		        --   1단계 7,500 / 2단계 12,500 / 3단계 20,000. 범위 밖은 마지막 값으로 클램프.
-		        d.augmentCosts = {7500, 12500, 20000}
+		        d.augmentCosts = {30000, 70000, 150000}
 		        -- icon: 증강 아이콘 스프라이트 RUID(증강 UI 슬롯/보유 목록). plain 스프라이트라 thumbnail:// 접두사 없이
 		        --   ImageRUID에 직접 설정한다(cubes.icon 패턴). msw-search로 확보한 메이플 공식 아이템 아이콘.
 		        d.augments = {
@@ -187,7 +187,7 @@ script BlacksmithConfig extends Logic
 		            --   stages = 구매가 감소율(%). 10/18/40 (blacksmith_upgrade.md §6).
 		            priceNego = { key = "priceNego", name = "가격 협상", type = "buyCost",
 		                applyTarget = "RequestBuyItem", desc = "무기 구매가 감소",
-		                stages = {10, 18, 40}, icon = "0bc56bdb2ba54b3dbdf43ff07cddb57f" },  -- 돈 주머니
+		                stages = {10, 18, 30}, icon = "0bc56bdb2ba54b3dbdf43ff07cddb57f" },  -- 돈 주머니
 		            -- 위험 거래: 상환 이자 증가 + 판매가 증가(고위험 고수익) (§6, 적용=Pricing+Debt)
 		            --   stages = 판매가/상환이자 동시 증가율(%). 10/20/30.
 		            riskyDeal = { key = "riskyDeal", name = "위험 거래", type = "riskReward",
