@@ -1,7 +1,7 @@
 @Logic
 script HudManager extends Logic
     -- 뒷골목 대장장이 — 로비/상점/스크래치 공용 상단 HUD(클라 전용 표시).
-    -- 좌상단 라디얼 시계("현재 시간" + n/5) / 우상단 메소 박스("현재 소유 메소" · "상환 필요 메소").
+    -- 좌상단 라디얼 시계("현재 시간" + n/N, N = 주차별 상환 주기 5/6/6/7/7) / 우상단 메소 박스("현재 소유 메소" · "상환 필요 메소").
     -- 이전엔 WeaponShopManager/ScratchTicketManager에 HUD 갱신 로직이 중복 존재했으나, 이 매니저로 일원화하고
     --   UI 엔티티도 전용 HudGroup.ui 하나로 통합했다(단일 출처).
     -- @Logic 이유: 전역 단일 표시 매니저 + HudGroup엔 in-group @Component가 없어 루트 Enable 게이팅이 안전.
@@ -84,8 +84,9 @@ script HudManager extends Logic
 
     @ExecSpace("ClientOnly")
     method void OnBeginPlay()
-        -- 최대 칸 수(상환 주기)는 config의 debtCycle = SSOT.
-        self.maxCubes = _BlacksmithConfig:GetData().debtCycle
+        -- 최대 칸 수(상환 주기)는 주차별 가변(debtCycles 5/6/6/7/7) — OnUpdate가 매 프레임 현재 주차 값으로 갱신.
+        --   여기서는 1주차 값으로 초기화만 해 둔다(첫 프레임 방어).
+        self.maxCubes = _BlacksmithConfig:GetDebtCycle(1)
         self.warnTime = 0
         if isvalid(self.timerRoot) and isvalid(self.timerRoot.UITransformComponent) then
             self.timerBasePos = self.timerRoot.UITransformComponent.anchoredPosition
@@ -173,6 +174,9 @@ script HudManager extends Logic
         if isvalid(self.hudRoot) then self.hudRoot.Enable = onInGame end
         if not onInGame then return end
 
+        -- 시계 최대 칸 수 = 현재 주차의 상환 주기(주차별 가변). UpdateClock/WarningFX/RecycleFX가 공유하는 캐시.
+        self.maxCubes = _BlacksmithConfig:GetDebtCycle(_GameManager.DebtStage + 1)
+
         self:UpdateClock()
         self:UpdateWeek()
         self:UpdateHud()
@@ -184,10 +188,11 @@ script HudManager extends Logic
 
     @ExecSpace("ClientOnly")
     method void UpdateClock()
-        -- 서버 권위 큐브 사용 횟수로 라디얼을 채운다(0/5에서 시작해 상환 시점 5/5로 증가).
-        local used = _GameManager.CubeUseCount % self.maxCubes
+        -- 서버 권위 '이번 주' 큐브 사용 횟수로 라디얼을 채운다(0/N에서 시작해 상환 시점 N/N으로 증가).
+        --   N = 현재 주차의 상환 주기(OnUpdate가 갱신한 maxCubes) — 2주차부터 "1/6"처럼 분모가 바뀐다.
+        local used = _GameManager.WeekCubeCount
         if _GameManager.IsRepaymentDue then used = self.maxCubes end
-        local key = tostring(used)
+        local key = tostring(used) .. "/" .. tostring(self.maxCubes)
         if key == self.lastClockKey then return end
         self.lastClockKey = key
         if isvalid(self.timerFill) then
@@ -255,10 +260,10 @@ script HudManager extends Logic
             end
             return
         end
-        local used = _GameManager.CubeUseCount % self.maxCubes
+        local used = _GameManager.WeekCubeCount
         if _GameManager.IsRepaymentDue then used = self.maxCubes end
-        local shakeOn = used >= (self.maxCubes - 2)   -- 3/5,4/5,5/5
-        local urgentOn = used >= (self.maxCubes - 1)  -- 4/5,5/5
+        local shakeOn = used >= (self.maxCubes - 2)   -- 끝에서 2칸 전부터 (예: 3/5·4/6·5/7~)
+        local urgentOn = used >= (self.maxCubes - 1)  -- 끝에서 1칸 전부터 (예: 4/5·5/6·6/7~)
 
         if shakeOn then
             self.warnTime = self.warnTime + delta
@@ -400,7 +405,7 @@ script HudManager extends Logic
             local t = math.min(self.recycleTimer / self.RecycleRewindTime, 1.0)
             local ease = 1 - (1 - t) * (1 - t)   -- ease-out
             -- 시계 표시를 (used+1) → used 로 되감기(fill+분침 동시).
-            local used = _GameManager.CubeUseCount % self.maxCubes
+            local used = _GameManager.WeekCubeCount
             local frac = (used + 1 - ease) / self.maxCubes
             if isvalid(self.timerFill) then self.timerFill.FillAmount = frac end
             if isvalid(self.timerHandle) then

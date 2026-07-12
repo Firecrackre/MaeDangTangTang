@@ -10,6 +10,9 @@ script GameManager extends Logic
     property integer Meso = 0            -- 보유 메소
     property string CurrentItemId = ""   -- 현재 보유 아이템(장비 id). 없으면 ""
     property integer CubeUseCount = 0    -- 누적 큐브 사용 횟수 ([6])
+    -- 이번 주(현재 상환 단계) 큐브 사용 횟수. 상환 성공 시 0 리셋. HUD 시계 "n/N"의 n.
+    --   주기가 주차별 가변(debtCycles 5/6/6/7/7)이라 누적 % 연산 대신 이 카운터로 상환 경계를 판정한다.
+    property integer WeekCubeCount = 0
     property integer DebtStage = 0       -- 완료한 상환 단계 ([7])
     property boolean IsGameOver = false  -- 게임 오버 여부 ([7])
     -- 게임오버 원인(게임오버 UI '사망 원인' 표시용). "" = 게임오버 아님.
@@ -151,12 +154,13 @@ script GameManager extends Logic
     @ExecSpace("ServerOnly")
     method table CreateSessionTable()
         -- 한 판의 전체 시작 상태 테이블을 생성한다. 설정은 BlacksmithConfig가 SSOT.
-        -- 미러 32개 스칼라 + 서버 전용 중첩 필드(ShopSlots/CurrentPotential/OwnedAugments) + UserId(생성자가 채움).
+        -- 미러 33개 스칼라 + 서버 전용 중첩 필드(ShopSlots/CurrentPotential/OwnedAugments) + UserId(생성자가 채움).
         local d = _BlacksmithConfig:GetData()
         return {
             Meso = d.startMeso,
             CurrentItemId = "",
             CubeUseCount = 0,
+            WeekCubeCount = 0,
             DebtStage = 0,
             IsGameOver = false,
             GameOverReason = "",
@@ -231,13 +235,14 @@ script GameManager extends Logic
 
     @ExecSpace("ServerOnly")
     method void PushState(string userId)
-        -- 세션의 미러 32개 스칼라를 flat table로 복사해 해당 유저 클라에만 전송한다(targeted Client RPC).
+        -- 세션의 미러 33개 스칼라를 flat table로 복사해 해당 유저 클라에만 전송한다(targeted Client RPC).
         -- ⚠ 화이트리스트 명시 복사만 허용 — 중첩 테이블(ShopSlots 등)·UserId는 절대 포함 금지.
         local s = self:GetSession(userId)
         local state = {
             Meso = s.Meso,
             CurrentItemId = s.CurrentItemId,
             CubeUseCount = s.CubeUseCount,
+            WeekCubeCount = s.WeekCubeCount,
             DebtStage = s.DebtStage,
             IsGameOver = s.IsGameOver,
             GameOverReason = s.GameOverReason,
@@ -280,6 +285,7 @@ script GameManager extends Logic
         self.Meso = state.Meso
         self.CurrentItemId = state.CurrentItemId
         self.CubeUseCount = state.CubeUseCount
+        self.WeekCubeCount = state.WeekCubeCount
         self.DebtStage = state.DebtStage
         self.IsGameOver = state.IsGameOver
         self.GameOverReason = state.GameOverReason
@@ -603,12 +609,13 @@ script GameManager extends Logic
     @ExecSpace("ServerOnly")
     method void UpdateRepaymentCountdown(table s)
         -- 다음 상환까지 남은 큐브 횟수 갱신. 미납 상태면 0으로 표시. (concept §6-4, [6])
-        local d = _BlacksmithConfig:GetData()
+        -- 주기 = 현재 주차(DebtStage+1)의 debtCycles 값(주차별 가변 5/6/6/7/7).
         if s.IsRepaymentDue then
             s.CubesUntilRepayment = 0
             return
         end
-        s.CubesUntilRepayment = d.debtCycle - (s.CubeUseCount % d.debtCycle)
+        local cycle = _BlacksmithConfig:GetDebtCycle(s.DebtStage + 1)
+        s.CubesUntilRepayment = cycle - s.WeekCubeCount
     end
 
     @ExecSpace("ServerOnly")
@@ -909,7 +916,6 @@ script GameManager extends Logic
             return
         end
 
-        local d = _BlacksmithConfig:GetData()
         -- 큐브 종류 해석(클라 입력 불신 → 서버가 config에서 비용/파괴여부 확정). 알 수 없으면 weird 폴백.
         local cube = _BlacksmithConfig:GetCube(cubeType)
         local cubeKey = cubeType
@@ -947,15 +953,19 @@ script GameManager extends Logic
                 .. ", procTotal=" .. tostring(s.RecycleProcCount))
         else
             s.CubeUseCount = s.CubeUseCount + 1
+            s.WeekCubeCount = s.WeekCubeCount + 1
 
-            -- 상환 주기(기본 5회) 경계 도달 시 상환 예정 상태로 전환 (concept §6-3, flow §15).
+            -- 이번 주 상환 주기(주차별 가변 5/6/6/7/7) 도달 시 상환 예정 상태로 전환 (concept §6-3, flow §15).
             -- 실제 차감/게임오버는 RequestSettleDebt에서 처리(스크래치 결과 완료 후 호출).
-            if s.CubeUseCount % d.debtCycle == 0 then
-                local stage = s.CubeUseCount // d.debtCycle
+            -- 미납 중 큐브 사용은 위에서 차단되므로 상환 단계 = 현재 주차(DebtStage+1).
+            local cycle = _BlacksmithConfig:GetDebtCycle(s.DebtStage + 1)
+            if s.WeekCubeCount >= cycle then
+                local stage = s.DebtStage + 1
                 s.IsRepaymentDue = true
                 -- 위험 거래(이자 증가)를 반영한 실효 상환금. 대출 빚(s.Debt)은 상환 시점에 별도 합산. (Phase 8·9)
                 s.PendingRepayment = self:ComputeRepaymentOf(s, stage)
                 log(self:Tag(s) .. "repayment DUE: stage=" .. tostring(stage)
+                    .. ", cycle=" .. tostring(cycle)
                     .. ", amount=" .. tostring(s.PendingRepayment))
             end
         end
@@ -1144,6 +1154,7 @@ script GameManager extends Logic
             s.Meso = s.Meso - amount
             s.Debt = 0
             s.DebtStage = s.DebtStage + 1
+            s.WeekCubeCount = 0   -- 새 주 시작 — 이번 주 큐브 카운터 리셋(카운트다운은 새 주기의 값으로 재계산)
             s.IsRepaymentDue = false
             s.PendingRepayment = 0
             self:UpdateRepaymentCountdown(s)

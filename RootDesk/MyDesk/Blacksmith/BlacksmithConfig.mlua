@@ -152,7 +152,9 @@ script BlacksmithConfig extends Logic
 		        }
 		
 		        -- 빚 상환 (concept §6-3, flow §15, finance_management.md 상환액 스케줄)
-		        d.debtCycle = 5                                -- N회 큐브 사용마다 상환
+		        -- 주차별 상환 주기(그 주에 사용 가능한 큐브 수). index = 주차. 조회는 GetDebtCycle(week)가 SSOT.
+		        --   1주 5회 / 2·3주 6회 / 4·5주 7회 (finance_management.md §5-1). (⚠ 고정 debtCycle = 5는 폐기)
+		        d.debtCycles = {5, 6, 6, 7, 7}
 		        d.debtTable = {50000, 100000, 200000, 450000}   -- 1~4주 금액
 		        d.debtGrowth = 1.1                             -- 테이블 범위 밖(5주~)은 매주 ×1.1
 		        d.winStage = 5                                 -- 상환 N회 성공 시 승리
@@ -409,6 +411,16 @@ script BlacksmithConfig extends Logic
 		        if stage <= n then return d.debtTable[stage] end
 		        local amount = d.debtTable[n] * (d.debtGrowth ^ (stage - n))
 		        return math.floor(amount / 1000 + 0.5) * 1000
+	end
+
+	method integer GetDebtCycle(integer week)
+		        -- 주차별 상환 주기(그 주에 사용 가능한 큐브 수). 범위 밖은 클램프(1주 미만→첫값, 표 초과→마지막값).
+		        -- (finance_management.md §5-1 SSOT — 1주 5 / 2·3주 6 / 4·5주 7)
+		        local cycles = self:GetData().debtCycles
+		        local n = #cycles
+		        if week < 1 then week = 1 end
+		        if week > n then week = n end
+		        return cycles[week]
 	end
 
 	method any GetAugment(string key)
