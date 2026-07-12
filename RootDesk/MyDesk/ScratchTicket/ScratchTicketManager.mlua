@@ -48,6 +48,9 @@ script ScratchTicketManager extends Component
     property Entity masterBuyButton = "f15c2ada-ee42-4391-b49e-2d0bb3bbdb6b"
     property TextComponent weirdBuyText = "a7b556a9-bf0b-48e2-b0a3-35acd579dbe1"
     property TextComponent masterBuyText = "f15c2ada-ee42-4391-b49e-2d0bb3bbdb6b"
+    -- 구매창 타이틀(첫 구매="큐브 구매" / 긁은 뒤 재노출="재구매?") + 구매 유도 화살표(CubeSelect 자식). UUID는 UIBuilder가 주입.
+    property TextGUIRendererComponent cubeTitleText = "68e1519a-686d-4841-9243-5dcb5807de4d"
+    property Entity guideArrow = "758abc8b-37ad-415c-b707-185dac8d5eb9"
 
     -- right price window
     property Entity priceWindow = "626f0e14-b1d2-455c-96b4-9f60e373e960"
@@ -103,6 +106,12 @@ script ScratchTicketManager extends Component
     -- ===== 큐브 구매창(CubeSelect) 슬라이드 전환 튜닝 (인스펙터 SSOT) =====
     property number CubeSlideOffset = 480       -- 큐브 사용 시 구매창이 보드 뒤로 밀려들어갈 X 거리(px, +=보드 방향). 도달 시 숨김.
     property number CubeSlideSpeed = 2400       -- 슬라이드 속도(px/s). 목표까지 선형 이동 후 스냅.
+
+    -- ===== 구매 유도 화살표(GuideArrow) 부유 튜닝 (인스펙터 SSOT) =====
+    @DisplayName("유도 화살표 이미지 RUID(애니메이션클립)")
+    property string GuideArrowRUID = "d34354e0e84949c48aba776fd783ec66"  -- 노란 아래 화살표 + '클릭' 5프레임 클립(직접 재생)
+    property number ArrowFloatAmp = 10          -- 부유 진폭(px)
+    property number ArrowFloatPeriod = 1.4      -- 부유 한 사이클 주기(초)
 
     -- ===== 복권 낙하 연출 튜닝 (인스펙터 SSOT) =====
     property number BoardDropOffsetY = 1000     -- 복권이 제자리 위에서 시작하는 높이(px). 이 높이에서 제자리로 낙하.
@@ -261,6 +270,11 @@ script ScratchTicketManager extends Component
     property boolean cubeShownTarget = true  -- true=노출 위치로, false=보드 뒤(숨김) 위치로
     property boolean cubeBaseCaptured = false -- baseX 캡처 여부
 
+    -- 구매 유도 화살표 런타임 상태(수직 사인 부유)
+    property number guideArrowBaseY = 0       -- 부유 기준 Y(OnBeginPlay 캡처, CubeSelect 로컬)
+    property boolean guideArrowBaseCaptured = false
+    property number guideArrowTime = 0        -- 부유 경과(초)
+
     -- 큐브 구매 연출 중 재클릭 방지 가드(클라 로컬)
     property boolean cubePurchasePending = false  -- 구매 요청~구매창 재노출(또는 타임아웃)까지 클릭 차단
     property number cubePendingTimer = 0
@@ -407,6 +421,9 @@ script ScratchTicketManager extends Component
             self.cubeSelectCurX = self.cubeSelectBaseX
             self.cubeBaseCaptured = true
         end
+
+        -- 구매 유도 화살표 초기화(클립 이미지 적용 + 부유 베이스 캡처).
+        self:InitGuideArrow()
 
         -- 렌더 순서 강제: 흰 배경판은 맨 뒤로, 은색 부스러기는 UI 맨 위로.
         self:FixRenderOrder()
@@ -667,6 +684,7 @@ script ScratchTicketManager extends Component
         self:UpdatePriceFX(delta)
         self:UpdateCoins(delta)
         self:UpdateCubeSlide(delta)
+        self:UpdateGuideArrow(delta)
         self:UpdateBoardDrop(delta)
         self:UpdateGradeTextFX(delta)
         self:UpdateCursor(delta)
@@ -742,6 +760,18 @@ script ScratchTicketManager extends Component
         if shown and _GameManager.IsRepaymentDue then shown = false end
         -- 구매창이 실제로 다시 노출되는 시점 = 재구매 허용(연출 종료/대기 복귀/재굴림 노출/활성 진입 공통 경로).
         if shown then self.cubePurchasePending = false end
+        -- 타이틀 전환(모든 노출 경로 공통): 이 무기에 큐브 미사용(첫 구매)="큐브 구매" / 긁은 뒤 재노출="재구매?".
+        -- 판매→새 무기 구매 시 서버가 HasPotential=false로 리셋하므로 자동으로 "큐브 구매"로 복귀한다.
+        -- 유도 화살표는 첫 구매("큐브 구매")일 때만 표시 — 재구매("재구매?") 화면에서는 숨김.
+        if shown then
+            local hasPot = _GameManager.HasPotential
+            if isvalid(self.cubeTitleText) then
+                self.cubeTitleText.Text = hasPot and "재구매?" or "큐브 구매"
+            end
+            if isvalid(self.guideArrow) then
+                self.guideArrow.Enable = not hasPot
+            end
+        end
         if not isvalid(self.cubeSelect) or not isvalid(self.cubeSelect.UITransformComponent) then return end
         if not self.cubeBaseCaptured then
             self.cubeSelectBaseX = self.cubeSelect.UITransformComponent.anchoredPosition.x
@@ -780,6 +810,36 @@ script ScratchTicketManager extends Component
         if (not self.cubeShownTarget) and self.cubeSelectCurX == targetX then
             self.cubeSelect.Enable = false
         end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void InitGuideArrow()
+        -- 구매 유도 화살표 초기화: 클립 이미지 적용(인스펙터 SSOT) + 부유 베이스 Y 캡처(CubeSelect 로컬).
+        -- CubeSelect 자식이라 슬라이드/숨김/상환 잠금은 부모를 그대로 따른다(별도 게이팅 불필요).
+        if not isvalid(self.guideArrow) then return end
+        if self.GuideArrowRUID ~= "" and isvalid(self.guideArrow.SpriteGUIRendererComponent) then
+            -- animationclip RUID는 접두사 없이 ImageRUID에 직접 설정하면 재생된다(SparkleFX와 동일).
+            self.guideArrow.SpriteGUIRendererComponent.ImageRUID = self.GuideArrowRUID
+        end
+        if isvalid(self.guideArrow.UITransformComponent) then
+            self.guideArrowBaseY = self.guideArrow.UITransformComponent.anchoredPosition.y
+            self.guideArrowBaseCaptured = true
+        end
+        log("[ScratchTicket] guide arrow init captured=" .. tostring(self.guideArrowBaseCaptured))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateGuideArrow(number delta)
+        -- 구매 유도 화살표 수직 사인 부유(둥둥 떠다님). 구매창이 켜져 있을 때만 갱신.
+        if not isvalid(self.cubeSelect) or not self.cubeSelect.Enable then return end
+        if not self.guideArrowBaseCaptured or not isvalid(self.guideArrow)
+            or not isvalid(self.guideArrow.UITransformComponent) then return end
+        self.guideArrowTime = self.guideArrowTime + delta
+        local period = self.ArrowFloatPeriod > 0 and self.ArrowFloatPeriod or 1.4
+        local offY = math.sin(self.guideArrowTime * 2 * math.pi / period) * self.ArrowFloatAmp
+        local ui = self.guideArrow.UITransformComponent
+        local p = ui.anchoredPosition
+        ui.anchoredPosition = Vector2(p.x, self.guideArrowBaseY + offY)
     end
 
     @ExecSpace("ClientOnly")
