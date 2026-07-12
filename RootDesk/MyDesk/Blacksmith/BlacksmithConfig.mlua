@@ -155,7 +155,7 @@ script BlacksmithConfig extends Logic
 		        -- 주차별 상환 주기(그 주에 사용 가능한 큐브 수). index = 주차. 조회는 GetDebtCycle(week)가 SSOT.
 		        --   1주 5회 / 2·3주 6회 / 4·5주 7회 (finance_management.md §5-1). (⚠ 고정 debtCycle = 5는 폐기)
 		        d.debtCycles = {5, 6, 6, 7, 7}
-		        d.debtTable = {50000, 100000, 200000, 450000}   -- 1~4주 금액
+		        d.debtTable = {50000, 100000, 200000, 900000, 15000000}   -- 1~4주 금액
 		        d.debtGrowth = 1.1                             -- 테이블 범위 밖(5주~)은 매주 ×1.1
 		        d.winStage = 5                                 -- 상환 N회 성공 시 승리
 		
