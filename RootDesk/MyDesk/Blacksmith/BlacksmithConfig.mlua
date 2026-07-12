@@ -36,23 +36,23 @@ script BlacksmithConfig extends Logic
 		        --     증강이 등급 확률을 올리는 대신 큐브 비용을 키우는 고위험 트레이드오프(유저 지정). GetCubeCost가 SSOT.
 		        --     (cost 필드는 폐기 — 모든 호출부는 GetCubeCost(cubeKey, gradeStage) 사용.)
 		        d.cubes = {
-		            weird  = { key = "weird",  label = "이상한 큐브", costs = {7000, 9000, 12000, 16000},    allowDestroy = true,  icon = "31e4268ff65b4281abd509162ca199e3" },
-		            master = { key = "master", label = "장인의 큐브", costs = {45000, 50000, 74000, 95000}, allowDestroy = false, icon = "1edec01f822c422293f62729e7462a22" },
+		            weird  = { key = "weird",  label = "이상한 큐브", costs = {7000, 8000, 9000, 10000},    allowDestroy = true,  icon = "31e4268ff65b4281abd509162ca199e3" },
+		            master = { key = "master", label = "장인의 큐브", costs = {45000, 50000, 58000, 70000}, allowDestroy = false, icon = "1edec01f822c422293f62729e7462a22" },
 		        }
 		
 		        -- 등급 (potential §4). 잠재능력 등급 = 5단계(커먼~레전더리). ⚠ 무기 등급(weaponGrades)과는 별개 축.
 		        --   gradeProb = 0단계(증강 '귀한 태생' 미보유) 기본 등장 확률표. 상위 단계는 cubeGradeProb로 교체.
 		        d.gradeOrder = {"Common", "Rare", "Epic", "Unique", "Legendary"}
 		        d.gradeProb = { Common = 60, Rare = 30, Epic = 10, Unique = 0, Legendary = 0 }        -- 0단계 기본표(합 100)
-		        d.gradeMult = { Common = 1.0, Rare = 1.3, Epic = 1.6, Unique = 2.3, Legendary = 3.2 }  -- 판매가 등급 배수(유저 지정)
+		        d.gradeMult = { Common = 1.0, Rare = 1.3, Epic = 1.6, Unique = 2.5, Legendary = 3.7 }  -- 판매가 등급 배수(유저 지정)
 		
 		        -- 증강 '귀한 태생'(innateGrade) 단계별 잠재 등급 절대 확률표 (blacksmith_upgrade.md §6, betterGoodsGradeProb 패턴).
 		        --   0단계(미보유) = 위 gradeProb. 1~3단계 = 아래 표로 통째 교체. 각 표의 합은 100.
 		        --   PotentialService:RollGrade가 보유 단계를 GetCubeGradeProbTable로 조회해 추첨한다.
 		        d.cubeGradeProb = {
-		            [1] = { Common = 40, Rare = 40, Epic = 15, Unique = 5,  Legendary = 0 },
-		            [2] = { Common = 24, Rare = 38, Epic = 23, Unique = 12, Legendary = 3 },
-		            [3] = { Common = 20, Rare = 25, Epic = 31, Unique = 19, Legendary = 5 },
+		            [1] = { Common = 34, Rare = 40, Epic = 18, Unique = 7,  Legendary = 1 },
+		            [2] = { Common = 20, Rare = 35, Epic = 25, Unique = 15, Legendary = 5 },
+		            [3] = { Common = 10, Rare = 25, Epic = 33, Unique = 20, Legendary = 12 },
 		        }
 		
 		        -- 옵션 타입 확률 — 각 줄 개별 판정 (potential §5). 합 100.
@@ -89,7 +89,7 @@ script BlacksmithConfig extends Logic
 		        }
 		
 		        -- 이탈 배수 — 유효 이탈 개수 기준 (pricing §12). 키 = 개수(0~3)
-		        d.bonusMult = { [0] = 1.0, [1] = 1.15, [2] = 1.4, [3] = 1.85 }
+		        d.bonusMult = { [0] = 1.0, [1] = 1.2, [2] = 1.5, [3] = 2.3 }
 		
 		        -- 조합 보너스 — 우선순위 높은 순서대로. 적용은 PricingCalculator에서 최고 1개만. (pricing §10)
 		        d.comboBonus = {
@@ -146,9 +146,9 @@ script BlacksmithConfig extends Logic
 		        --   0단계(미보유) = 위 weaponGrades.prob(30/30/28/10/2). 각 표의 합은 100.
 		        --   1단계는 레전더리 0% — RollWeaponGrade가 0 가중치를 허용하므로 그대로 동작한다.
 		        d.betterGoodsGradeProb = {
-		            [1] = { Common = 45, Rare = 40, Epic = 12, Unique = 3,  Legendary = 0 },
-		            [2] = { Common = 30, Rare = 42, Epic = 19, Unique = 7,  Legendary = 2 },
-		            [3] = { Common = 18, Rare = 38, Epic = 27, Unique = 13, Legendary = 4 },
+		            [1] = { Common = 40, Rare = 42, Epic = 14, Unique = 3,  Legendary = 1 },
+		            [2] = { Common = 24, Rare = 39, Epic = 22, Unique = 11,  Legendary = 4 },
+		            [3] = { Common = 10, Rare = 27, Epic = 35, Unique = 18, Legendary = 10 },
 		        }
 		
 		        -- 빚 상환 (concept §6-3, flow §15, finance_management.md 상환액 스케줄)
@@ -170,7 +170,7 @@ script BlacksmithConfig extends Logic
 		        -- 증강 구매 비용 = 증강이 '도달할 단계' 기준(단계 높을수록 비쌈). (blacksmith_upgrade.md §3)
 		        --   구매 방식(유저 확정): 로비 '대장 기술' → 3택 창 → 각 증강 하단의 구매 골드로 즉시 지불.
 		        --   1단계 7,500 / 2단계 12,500 / 3단계 20,000. 범위 밖은 마지막 값으로 클램프.
-		        d.augmentCosts = {30000, 70000, 150000}
+		        d.augmentCosts = {20000, 40000, 85000}
 		        -- icon: 증강 아이콘 스프라이트 RUID(증강 UI 슬롯/보유 목록). plain 스프라이트라 thumbnail:// 접두사 없이
 		        --   ImageRUID에 직접 설정한다(cubes.icon 패턴). msw-search로 확보한 메이플 공식 아이템 아이콘.
 		        d.augments = {
@@ -184,17 +184,17 @@ script BlacksmithConfig extends Logic
 		            --   stages = 주요 옵션 1줄이 '유효 옵션'으로 강제될 확률(%). 10/20/45 (blacksmith_upgrade.md §6).
 		            smithEye = { key = "smithEye", name = "대장장이의 눈", type = "validOption",
 		                applyTarget = "RollLine", desc = "현재 무기의 유효 옵션 등장 확률 증가",
-		                stages = {15, 30, 45}, icon = "2c87d6385a60420ab55fa8d36ff3d6dc" },  -- 감정 돋보기
+		                stages = {15, 38, 65}, icon = "2c87d6385a60420ab55fa8d36ff3d6dc" },  -- 감정 돋보기
 		            -- 가격 협상: 무기 구매가 감소, 게임 끝까지 유지 (§6, 적용=RequestBuyItem)
 		            --   stages = 구매가 감소율(%). 10/18/40 (blacksmith_upgrade.md §6).
 		            priceNego = { key = "priceNego", name = "가격 협상", type = "buyCost",
 		                applyTarget = "RequestBuyItem", desc = "무기 구매가 감소",
-		                stages = {10, 18, 30}, icon = "0bc56bdb2ba54b3dbdf43ff07cddb57f" },  -- 돈 주머니
+		                stages = {10, 22, 40}, icon = "0bc56bdb2ba54b3dbdf43ff07cddb57f" },  -- 돈 주머니
 		            -- 위험 거래: 상환 이자 증가 + 판매가 증가(고위험 고수익) (§6, 적용=Pricing+Debt)
 		            --   stages = 판매가/상환이자 동시 증가율(%). 10/20/30.
 		            riskyDeal = { key = "riskyDeal", name = "위험 거래", type = "riskReward",
 		                applyTarget = "Pricing+Debt", desc = "상환 이자 증가, 대신 판매가 증가",
-		                stages = {10, 18, 30}, icon = "8114bc5eeba544989e14a8e46a1ea0f2" },  -- 시한폭탄
+		                stages = {10, 25, 50}, icon = "8114bc5eeba544989e14a8e46a1ea0f2" },  -- 시한폭탄
 		            -- 귀한 태생: 큐브 사용 시 높은 잠재 등급이 등장할 확률 증가 (적용=RollGrade, cubeGradeProb 단계표)
 		            --   ⚠ 효과는 배수가 아니라 단계별 절대 확률표(d.cubeGradeProb). stages는 단계 표기용(1/2/3)일 뿐 수치 의미 없음.
 		            --   ⚠ 트레이드오프: 단계가 오를수록 큐브 구매가(d.cubes.*.costs)도 상승한다(유저 지정).
@@ -206,7 +206,7 @@ script BlacksmithConfig extends Logic
 		            --   메소는 정상 차감(유저 확정) — 시계 카운트·상환 카운트만 오르지 않는다.
 		            recycleExpert = { key = "recycleExpert", name = "재활용 전문가", type = "cubeSave",
 		                applyTarget = "DoUseCube", desc = "큐브 사용 시 일정 확률로 사용 횟수 차감 방지",
-		                stages = {10, 20, 35}, icon = "3fd4b286ba544158aa863c2f02983495" },  -- 마법의 모래시계
+		                stages = {25, 37, 53}, icon = "3fd4b286ba544158aa863c2f02983495" },  -- 마법의 모래시계
 		        }
 		
 		        -- ── 재정 관리 (finance_management.md) ─────────────────────────────────────
@@ -223,7 +223,7 @@ script BlacksmithConfig extends Logic
 		            minDeposit = 10000,   -- 최소 저축 금액 (§8)
 		            dailyRate = 5,        -- 상환 1회(하루)당 이자율(%) (§8)
 		        }
-
+		
 		        -- ── 시즌 패스 (docs/specs/seasonpass.md §12·§15·§16) ──────────────────────
 		        --   미션 판정은 서버 범용 엔진(GameManager:CheckSeasonMissions)이 statKey로 세션 통계를 직접 읽는다:
 		        --     s[statKey] >= target 이면 자동 클리어 + reward 점수 지급(§8 자동 지급, 유저 확정).
@@ -251,7 +251,7 @@ script BlacksmithConfig extends Logic
 		                { score = 4000, name = "뒷골목 대장장이 세트", icon = "thumbnail://237cd883e7134b65b7af11ffd9f14e5d" },
 		            },
 		        }
-
+		
 		        self.Data = d
 	end
 
