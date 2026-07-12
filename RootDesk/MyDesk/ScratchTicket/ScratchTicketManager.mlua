@@ -212,6 +212,15 @@ script ScratchTicketManager extends Component
     @DisplayName("커서: 긁는 중(금색 코인)")   property string CursorCopperRUID = "02a489cccff24a139a6c3582a5871f58"   -- 긁는 중도 금색 메소(사용자 요청). 동색 코인 있으면 인스펙터에서 교체.
     property Vector2 CursorHotspot = Vector2(0, 0)   -- 커서 핫스팟(이미지 기준점 보정)
 
+    -- ===== 긁기 유도 힌트(화살표 + 포인터 좌우 왕복) — 복권 착지 후 은박 첫 클릭 전까지 표시 =====
+    property Entity hintRoot = "03450b79-dd28-4ce3-89de-38a944064fef"                              -- Board/ScratchHint 컨테이너(UIBuilder 주입)
+    property SpriteGUIRendererComponent hintArrowSprite = "aed490e4-eb17-48aa-8404-1e7cafeffad9"   -- Board/ScratchHint/HintArrow(<-> 화살표)
+    property Entity hintCursor = "f62fc0f5-adac-4a3e-83a6-22f665158012"                            -- Board/ScratchHint/HintCursor(왕복 포인터)
+    @DisplayName("힌트: 화살표 이미지 RUID") property string HintArrowRUID = "eed2e8e28078445a9f8f7ea0b85b6aee"
+    @DisplayName("힌트: 포인터 이미지 RUID") property string HintCursorRUID = "3930c5d2e85b4bff8467aada64fda7f5"
+    property number HintCursorTravel = 220    -- 포인터 좌우 왕복 반경(px, 화살표 폭 안쪽)
+    property number HintCursorPeriod = 1.6    -- 왕복 한 사이클 주기(초)
+
     -- ===== Runtime state =====
     property any tickets = nil
     property any touchHandler = nil
@@ -237,6 +246,10 @@ script ScratchTicketManager extends Component
     -- 은박 커서 상태: 긁는 중 잔여시간/현재 적용 커서("":기본/"gold"/"copper"). hover는 커서 위치 폴링(IsCursorOverFoil).
     property number scratchTimer = 0
     property string cursorNow = ""
+
+    -- 긁기 유도 힌트 런타임 상태
+    property boolean hintVisible = false     -- 힌트 표시 중(디듀프)
+    property number hintTime = 0             -- 포인터 왕복 경과(초)
 
     property boolean destroyPending = false
     property number destroyTimer = 0
@@ -397,6 +410,9 @@ script ScratchTicketManager extends Component
 
         -- 렌더 순서 강제: 흰 배경판은 맨 뒤로, 은색 부스러기는 UI 맨 위로.
         self:FixRenderOrder()
+
+        -- 긁기 유도 힌트 초기화(이미지 적용 + Board 자식 최상단 + 숨김).
+        self:InitScratchHint()
 
         -- 시작은 숨김(맵 게이팅 gotcha 회피: 명시적으로 끈다).
         -- 델타 팝업 시작 y 캡처(있으면).
@@ -654,6 +670,7 @@ script ScratchTicketManager extends Component
         self:UpdateBoardDrop(delta)
         self:UpdateGradeTextFX(delta)
         self:UpdateCursor(delta)
+        self:UpdateScratchHint(delta)
     end
 
     @ExecSpace("ClientOnly")
@@ -700,6 +717,7 @@ script ScratchTicketManager extends Component
         if not on then self:HideSaleResult() end
         if not on then self:StopCoins() end
         if not on then self:EndFocus() end             -- 포커스 스포트라이트 잔상 방지(줌/어둠 원복).
+        if not on then self:HideScratchHint() end      -- 긁기 유도 힌트 잔상 방지(맵 이탈/모달).
         if not on then self.scratchReady = false end   -- 맵 이탈/아이템 없음 → 긁기 차단.
         -- 비활성 후에는 OnUpdate가 early return하여 UpdateCursor(루프 정지 에지)가 안 돌므로 여기서 명시 정지.
         if not on then self:SetScratchLoop(false) end
@@ -933,10 +951,60 @@ script ScratchTicketManager extends Component
 
     @ExecSpace("ClientOnly")
     method void OnBoardLanded()
-        -- 복권 착지 시점: 좌하단 구매창을 우측으로 슬라이드 아웃(사라짐) + 긁기 허용.
+        -- 복권 착지 시점: 좌하단 구매창을 우측으로 슬라이드 아웃(사라짐) + 긁기 허용 + 긁기 유도 힌트 표시.
         self:SetCubeSelectShown(false, false)
         self.scratchReady = true
+        self:ShowScratchHint()   -- 매 복권마다 표시 — 은박 첫 클릭 시 즉시 제거(Scratch).
         log("[ScratchTicket] board landed -> slide out cube window, scratch enabled")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void InitScratchHint()
+        -- 긁기 유도 힌트 초기화: 화살표/포인터 이미지 적용(인스펙터 SSOT) + Board 자식 중 최상단 확정 + 숨김.
+        if isvalid(self.hintArrowSprite) and self.HintArrowRUID ~= "" then
+            self.hintArrowSprite.ImageRUID = self.HintArrowRUID
+        end
+        if self.HintCursorRUID ~= "" then
+            self:SetIcon(self.hintCursor, self.HintCursorRUID, nil)
+        end
+        self:BringToFront(self.hintRoot)   -- 은박(Ticket1~3)보다 나중에 그리도록 형제 순서 확정.
+        self.hintVisible = false
+        self.hintTime = 0
+        if isvalid(self.hintRoot) then self.hintRoot.Enable = false end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ShowScratchHint()
+        -- 긁기 유도 힌트 표시(복권 착지 시). 포인터는 중앙에서 왕복 시작.
+        if self.hintVisible then return end
+        self.hintVisible = true
+        self.hintTime = 0
+        if isvalid(self.hintCursor) and isvalid(self.hintCursor.UITransformComponent) then
+            local p = self.hintCursor.UITransformComponent.anchoredPosition
+            self.hintCursor.UITransformComponent.anchoredPosition = Vector2(0, p.y)
+        end
+        if isvalid(self.hintRoot) then self.hintRoot.Enable = true end
+        log("[ScratchTicket] hint shown")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void HideScratchHint()
+        -- 긁기 유도 힌트 제거(은박 첫 클릭/대기 복귀/비활성). 디듀프.
+        if not self.hintVisible then return end
+        self.hintVisible = false
+        if isvalid(self.hintRoot) then self.hintRoot.Enable = false end
+        log("[ScratchTicket] hint hidden")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateScratchHint(number delta)
+        -- 힌트 포인터 좌우 왕복(사인 — 양끝 자연 감속). hintVisible일 때만.
+        if not self.hintVisible then return end
+        if not isvalid(self.hintCursor) or not isvalid(self.hintCursor.UITransformComponent) then return end
+        self.hintTime = self.hintTime + delta
+        local x = math.sin(self.hintTime * 2 * math.pi / self.HintCursorPeriod) * self.HintCursorTravel
+        local p = self.hintCursor.UITransformComponent.anchoredPosition
+        self.hintCursor.UITransformComponent.anchoredPosition = Vector2(x, p.y)
     end
 
     @ExecSpace("ClientOnly")
@@ -946,6 +1014,7 @@ script ScratchTicketManager extends Component
         if isvalid(self.board) then self.board.Enable = false end
         self.dropT = -1   -- 진행 중 낙하 취소
         self:EndFocus()   -- 포커스 스포트라이트 원복(줌/팬/어둠)
+        self:HideScratchHint()   -- 긁기 유도 힌트 잔상 방지(판매/재굴림 복귀).
         self.gradeTextMode = 0
         self:RestoreGradeText()   -- 등급 텍스트 애니 정지 + 베이스 원복
         if isvalid(self.centerCube) then self.centerCube.Enable = false end
@@ -1480,6 +1549,7 @@ script ScratchTicketManager extends Component
                         if self.focusIndex == 0 and self:IsFocusLine(t.index) then
                             self:StartFocus(t.index)
                         end
+                        self:HideScratchHint()   -- 은박을 처음 건드린 순간 긁기 유도 힌트 즉시 제거.
                         self:ApplyBrush(t, u, v)
                         self:SpawnCrumb(touchPoint)
                         self.scratchTimer = 0.12   -- "지금 은박을 눌러 긁는 중" 표시(드래그 프레임마다 갱신 → 동색 유지)
